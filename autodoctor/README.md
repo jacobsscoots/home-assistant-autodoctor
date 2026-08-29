@@ -31,6 +31,15 @@ Optional MCP support uses `ganhammar/hass-mcp-server` for connectivity and capab
 discovery only in v0.1. The next phase will add explicit automation/script identifier resolution,
 then use MCP backup, validation and restore tools rather than unrestricted filesystem access.
 
+## Feedback-loop protection
+
+AutoDoctor deliberately ignores log events whose logger name or message contains `autodoctor`.
+This prevents AutoDoctor's own warnings from becoming new AutoDoctor incidents.
+
+When performing a synthetic smoke test, do **not** put the word `autodoctor` in the test logger
+or message. A neutral logger/message such as `ha_pipeline_smoke_test` and
+`Synthetic monitor-only pipeline verification event` will exercise the pipeline correctly.
+
 ## Why it does not require Watchman or Spook
 
 Both can be useful evidence sources, but AutoDoctor uses Home Assistant's native system log
@@ -51,5 +60,9 @@ change behaviour. API usage is billed separately from ChatGPT/Claude consumer su
 For Claude/manual repair access and future safe execution, install
 `ganhammar/hass-mcp-server`, enable native Home Assistant authentication, create a dedicated
 Long-Lived Access Token, then configure its `/api/mcp` URL and token in AutoDoctor.
+
+AutoDoctor targets the current MCP Python SDK v2 transport. That SDK intentionally uses
+`httpx2`, not `httpx`, for Streamable HTTP clients. AutoDoctor declares `httpx2` explicitly
+because `mcp_backend.py` imports it directly.
 
 Do not reuse an administrator's general-purpose token.
