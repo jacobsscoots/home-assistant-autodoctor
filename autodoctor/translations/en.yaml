@@ -6,17 +6,17 @@ configuration:
     name: Occurrences before AI analysis
     description: Repeated non-critical incidents must reach this count before an AI call.
   analysis_cooldown_seconds:
-    name: Per-incident AI cooldown
-    description: Minimum seconds before the same incident fingerprint can be analysed again.
+    name: Per-incident AI attempt cooldown
+    description: Minimum seconds before the same incident fingerprint can make another AI attempt, including failures or budget blocks.
   max_ai_analyses_per_hour:
-    name: AI calls per hour
-    description: Global cost and loop protection.
+    name: AI attempts per hour
+    description: Global attempt-rate protection, including budget-blocked attempts, independent from the monthly budget.
   ai_provider:
     name: AI provider
     description: Monitor only, OpenAI API, or Anthropic API.
   ai_model:
     name: AI model
-    description: Optional model override. Leave blank for AutoDoctor's provider default.
+    description: Exact provider model ID. Required whenever an AI provider is enabled.
   ai_effort:
     name: AI effort
     description: Low is recommended for routine triage; raise only for difficult incidents.
@@ -24,6 +24,21 @@ configuration:
     name: OpenAI API key
   anthropic_api_key:
     name: Anthropic API key
+  ai_budget_enabled:
+    name: Enable AI budget guard
+    description: Must be enabled before an external AI provider can start.
+  ai_monthly_budget_usd:
+    name: External monthly budget (USD)
+    description: Reference ceiling for the provider project; AutoDoctor requires a lower internal stop threshold.
+  ai_monthly_stop_usd:
+    name: AutoDoctor monthly stop (USD)
+    description: Internal hard stop. Must be greater than zero and lower than the external monthly budget.
+  ai_input_cost_per_million_usd:
+    name: Input price per million tokens (USD)
+    description: Enter the current published input price for the exact configured model.
+  ai_output_cost_per_million_usd:
+    name: Output price per million tokens (USD)
+    description: Enter the current published output price for the exact configured model.
   mcp_enabled:
     name: Enable Home Assistant MCP enrichment
   mcp_url:
@@ -34,4 +49,4 @@ configuration:
     name: Notify on new incident
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.1 cannot apply changes.
+    description: Reserved for the validated executor. v0.1.2 cannot apply changes.
