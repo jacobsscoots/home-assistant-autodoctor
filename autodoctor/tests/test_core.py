@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1] / "app"
 sys.path.insert(0, str(ROOT))
 
+from autodoctor.context import collect_context
 from autodoctor.fingerprint import fingerprint
 from autodoctor.llm import AnthropicProvider, OpenAIProvider
 from autodoctor.models import LogEvent
@@ -48,6 +51,33 @@ def test_feedback_loop_filter_ignores_autodoctor_events() -> None:
     assert should_ignore(event("AutoDoctor emitted this diagnostic message"))
     assert should_ignore(event("ordinary message", name="autodoctor.worker"))
     assert not should_ignore(event("Synthetic monitor-only pipeline verification event"))
+
+
+def test_context_pseudonymizes_entities_before_external_ai() -> None:
+    class FakeHA:
+        async def get_state(self, entity_id: str):
+            assert entity_id == "device_tracker.private_phone"
+            return {
+                "state": "home",
+                "last_changed": "2026-08-29T18:00:00+00:00",
+                "attributes": {
+                    "friendly_name": "Private Phone Owner",
+                    "device_class": None,
+                },
+            }
+
+    value = asyncio.run(
+        collect_context(
+            event("device_tracker.private_phone became unavailable"),
+            FakeHA(),
+        )
+    )
+    serialized = json.dumps(value)
+
+    assert "device_tracker.private_phone" not in serialized
+    assert "Private Phone Owner" not in serialized
+    assert "device_tracker.entity_1" in serialized
+    assert value["referenced_entities"]["device_tracker.entity_1"]["state"] == "home"
 
 
 def test_v01_never_auto_applies() -> None:
