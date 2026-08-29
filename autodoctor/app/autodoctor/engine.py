@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from .budget import estimate_cost_usd, reservation_for_prompt
 from .config import Settings
 from .context import collect_context
 from .fingerprint import fingerprint
@@ -87,23 +88,83 @@ class AutoDoctorEngine:
             "If a concrete patch cannot be justified, propose checks rather than guessing.\n\n"
             + json.dumps(context, ensure_ascii=False, indent=2)
         )
+
+        reservation = reservation_for_prompt(
+            self.llm.reservation_input_text(prompt),
+            self.llm.max_output_tokens,
+            self.settings,
+        )
+        usage_id, spent_before = await self.store.reserve_ai_usage(
+            fingerprint=fp,
+            provider=self.llm.provider_name,
+            model=self.llm.model,
+            reserved_input_tokens=reservation.input_tokens,
+            reserved_output_tokens=reservation.output_tokens,
+            reserved_cost_usd=reservation.cost_usd,
+            monthly_stop_usd=self.settings.ai_monthly_stop_usd,
+        )
+        # Cooldown applies to every AI attempt, including provider failures and
+        # local budget blocks. This prevents a repeating HA error from creating
+        # a tight retry loop or a flood of budget-block records.
+        await self.store.mark_analysis_attempt(fp)
+        if usage_id is None:
+            _LOG.warning(
+                "AI budget blocked %s: spent=$%.8f reserve=$%.8f stop=$%.8f",
+                fp,
+                spent_before,
+                reservation.cost_usd,
+                self.settings.ai_monthly_stop_usd,
+            )
+            return
+
         try:
-            analysis = await self.llm.analyze(prompt)
-            if analysis is None:
+            result = await self.llm.analyze(prompt)
+            if result is None:
+                await self.store.fail_ai_usage(usage_id, "provider returned no analysis")
                 return
+
+            input_tokens = (
+                result.input_tokens
+                if result.input_tokens is not None
+                else reservation.input_tokens
+            )
+            output_tokens = (
+                result.output_tokens
+                if result.output_tokens is not None
+                else reservation.output_tokens
+            )
+            actual_cost = estimate_cost_usd(
+                input_tokens,
+                output_tokens,
+                self.settings.ai_input_cost_per_million_usd,
+                self.settings.ai_output_cost_per_million_usd,
+            )
+            await self.store.finalize_ai_usage(
+                usage_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=actual_cost,
+            )
+
+            analysis = result.analysis
             await self.store.save_analysis(fp, analysis)
             _LOG.info(
-                "AI analysis %s risk=%s confidence=%.2f action=%s: %s",
+                "AI analysis %s risk=%s confidence=%.2f action=%s cost=$%.8f: %s",
                 fp,
                 analysis.risk,
                 analysis.confidence,
                 analysis.action,
+                actual_cost,
                 analysis.summary[:220],
             )
             if self.settings.auto_apply_low_risk:
                 _LOG.warning("auto_apply_low_risk requested, but v0.1 executor is intentionally disabled")
         except Exception as exc:
             self.last_error = str(exc)
+            try:
+                await self.store.fail_ai_usage(usage_id, str(exc))
+            except Exception:
+                _LOG.exception("Failed to preserve AI budget reservation for %s", fp)
             _LOG.exception("AI analysis failed for %s", fp)
 
     async def _should_analyze(self, event: LogEvent, row: dict[str, Any]) -> bool:
@@ -118,11 +179,33 @@ class AutoDoctorEngine:
     async def health(self) -> dict[str, Any]:
         incidents = await self.store.list_recent(1000)
         mcp = await self.mcp.health()
+        usage = await self.store.monthly_ai_usage()
+        stop = max(0.0, float(self.settings.ai_monthly_stop_usd))
+        spent = float(usage["spent_usd"])
+        budget = {
+            "enabled": self.settings.ai_budget_enabled,
+            "month_utc": usage["month_utc"],
+            "monthly_budget_usd": float(self.settings.ai_monthly_budget_usd),
+            "stop_threshold_usd": stop,
+            "spent_usd": spent,
+            "remaining_to_stop_usd": max(0.0, stop - spent),
+            "analyses_count": usage["analyses_count"],
+            "attempts_count": usage["attempts_count"],
+            "failed_count": usage["failed_count"],
+            "reserved_count": usage["reserved_count"],
+            "budget_blocked_count": usage["budget_blocked_count"],
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
+            "input_cost_per_million_usd": float(self.settings.ai_input_cost_per_million_usd),
+            "output_cost_per_million_usd": float(self.settings.ai_output_cost_per_million_usd),
+        }
         return {
             "status": "ok",
             "processed_events": self.processed_events,
             "open_incidents": sum(1 for x in incidents if x["status"] in {"open", "reopened"}),
             "ai_provider": self.settings.ai_provider,
+            "ai_model": self.settings.ai_model,
+            "ai_budget": budget,
             "mcp": mcp,
             "auto_apply_low_risk_configured": self.settings.auto_apply_low_risk,
             "auto_apply_executor_enabled": False,
