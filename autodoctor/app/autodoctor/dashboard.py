@@ -45,6 +45,12 @@ class Dashboard:
         rows = "".join(self._row(item) for item in incidents) or '<tr><td colspan="7">No incidents captured yet.</td></tr>'
         mcp = health.get("mcp", {})
         mcp_text = "connected" if mcp.get("connected") else ("disabled" if not mcp.get("enabled") else "not connected")
+        budget = health.get("ai_budget", {})
+        budget_text = (
+            f"${budget.get('spent_usd', 0):.4f} / ${budget.get('stop_threshold_usd', 0):.2f}"
+            if budget.get("enabled")
+            else "locked"
+        )
         body = f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="20"><title>AutoDoctor</title>
@@ -63,10 +69,13 @@ small{{color:#9ca3af}}
 <div><div class="k">Events processed</div><div class="v">{health['processed_events']}</div></div>
 <div><div class="k">Open incidents</div><div class="v">{health['open_incidents']}</div></div>
 <div><div class="k">AI</div><div class="v">{html.escape(health['ai_provider'])}</div></div>
+<div><div class="k">AI spend / stop</div><div class="v">{html.escape(budget_text)}</div></div>
+<div><div class="k">AI analyses</div><div class="v">{int(budget.get('analyses_count', 0))}</div></div>
+<div><div class="k">Budget blocked</div><div class="v">{int(budget.get('budget_blocked_count', 0))}</div></div>
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.1 is observer/proposal mode. It cannot apply AI changes, even if the option is enabled.</div>
+<div class="card"><strong>Safety:</strong> v0.1.2 can monitor and store AI diagnoses, but the repair executor remains hard-disabled.</div>
 <div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")
