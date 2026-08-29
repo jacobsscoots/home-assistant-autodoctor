@@ -1,10 +1,10 @@
 name: "AutoDoctor"
-version: "0.1.0"
+version: "0.1.1"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, deduplicates incidents, asks an AI
   to investigate actionable failures, and prepares safe repair proposals.
-url: "https://github.com/jacobsscoots/Home-Assistant"
+url: "https://github.com/jacobsscoots/home-assistant-autodoctor"
 startup: application
 boot: auto
 init: false
