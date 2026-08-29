@@ -42,8 +42,8 @@ jobs:
               yaml.safe_load(path.read_text())
               print(f'OK: {path}')
           PY
-      - name: Run focused tests
-        run: python -m pytest -q autodoctor/tests/test_core.py
+      - name: Run tests
+        run: python -m pytest -q autodoctor/tests
 
   container-build:
     runs-on: ubuntu-latest
@@ -52,6 +52,6 @@ jobs:
       - name: Build Home Assistant app image
         run: |
           docker build \
-            --build-arg BUILD_VERSION=0.1.1 \
+            --build-arg BUILD_VERSION=0.1.2 \
             --build-arg BUILD_ARCH=amd64 \
             autodoctor
