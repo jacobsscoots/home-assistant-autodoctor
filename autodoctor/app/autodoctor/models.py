@@ -42,3 +42,10 @@ class Analysis:
     checks: list[str] = field(default_factory=list)
     proposed_changes: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AIResult:
+    analysis: Analysis
+    input_tokens: int | None = None
+    output_tokens: int | None = None
