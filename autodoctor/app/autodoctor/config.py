@@ -16,6 +16,11 @@ class Settings:
     ai_effort: str = "low"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    ai_budget_enabled: bool = False
+    ai_monthly_budget_usd: float = 0.0
+    ai_monthly_stop_usd: float = 0.0
+    ai_input_cost_per_million_usd: float = 0.0
+    ai_output_cost_per_million_usd: float = 0.0
     mcp_enabled: bool = False
     mcp_url: str = ""
     mcp_token: str = ""
