@@ -13,6 +13,7 @@ LABEL \
 RUN apk add --no-cache python3 py3-pip ca-certificates && \
     python3 -m pip install --no-cache-dir --break-system-packages \
       'aiohttp>=3.10,<4' \
+      'httpx2>=2.5,<3' \
       'mcp>=2,<3'
 
 COPY app /app
