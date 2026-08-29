@@ -11,12 +11,12 @@ sys.path.insert(0, str(ROOT))
 from autodoctor.fingerprint import fingerprint
 from autodoctor.llm import AnthropicProvider, OpenAIProvider
 from autodoctor.models import LogEvent
-from autodoctor.policy import can_auto_apply, is_immediate, looks_transient
+from autodoctor.policy import can_auto_apply, is_immediate, looks_transient, should_ignore
 from autodoctor.redact import redact
 
 
-def event(message: str, exception: str = "") -> LogEvent:
-    return LogEvent("ERROR", "core.py", exception, message, "homeassistant.test", 1.0)
+def event(message: str, exception: str = "", name: str = "homeassistant.test") -> LogEvent:
+    return LogEvent("ERROR", "core.py", exception, message, name, 1.0)
 
 
 def test_fingerprint_ignores_incidental_numbers() -> None:
@@ -44,6 +44,12 @@ def test_policy_immediate_and_transient() -> None:
     assert looks_transient(event("Connection timed out"))
 
 
+def test_feedback_loop_filter_ignores_autodoctor_events() -> None:
+    assert should_ignore(event("AutoDoctor emitted this diagnostic message"))
+    assert should_ignore(event("ordinary message", name="autodoctor.worker"))
+    assert not should_ignore(event("Synthetic monitor-only pipeline verification event"))
+
+
 def test_v01_never_auto_applies() -> None:
     assert not can_auto_apply("low", "deterministic_fix", True)
 
@@ -56,3 +62,13 @@ def test_openai_requires_explicit_model() -> None:
 def test_anthropic_requires_explicit_model() -> None:
     with pytest.raises(RuntimeError, match="ai_model must be set explicitly"):
         AnthropicProvider("test-key", "", "low")
+
+
+def test_mcp_v2_http_transport_imports() -> None:
+    import httpx2
+    from mcp import Client
+    from mcp.client.streamable_http import streamable_http_client
+
+    assert httpx2.AsyncClient is not None
+    assert Client is not None
+    assert streamable_http_client is not None
