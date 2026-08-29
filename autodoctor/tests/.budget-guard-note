@@ -1,0 +1,1 @@
+v0.1.2 budget tests cover fail-closed configuration, legacy SQLite migration, UTC month reset, persistent reservations, blocked calls, and actual-usage reconciliation.
