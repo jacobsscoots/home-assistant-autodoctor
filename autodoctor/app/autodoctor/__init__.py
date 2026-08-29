@@ -1,0 +1,1 @@
+"""AutoDoctor Home Assistant app."""

@@ -1,0 +1,37 @@
+configuration:
+  min_level:
+    name: Minimum log level
+    description: ERROR is recommended initially to avoid analysing noisy warnings.
+  min_occurrences_for_ai:
+    name: Occurrences before AI analysis
+    description: Repeated non-critical incidents must reach this count before an AI call.
+  analysis_cooldown_seconds:
+    name: Per-incident AI cooldown
+    description: Minimum seconds before the same incident fingerprint can be analysed again.
+  max_ai_analyses_per_hour:
+    name: AI calls per hour
+    description: Global cost and loop protection.
+  ai_provider:
+    name: AI provider
+    description: Monitor only, OpenAI API, or Anthropic API.
+  ai_model:
+    name: AI model
+    description: Optional model override. Leave blank for AutoDoctor's provider default.
+  ai_effort:
+    name: AI effort
+    description: Low is recommended for routine triage; raise only for difficult incidents.
+  openai_api_key:
+    name: OpenAI API key
+  anthropic_api_key:
+    name: Anthropic API key
+  mcp_enabled:
+    name: Enable Home Assistant MCP enrichment
+  mcp_url:
+    name: MCP URL
+  mcp_token:
+    name: Dedicated MCP Long-Lived Access Token
+  notify_on_new_incident:
+    name: Notify on new incident
+  auto_apply_low_risk:
+    name: Auto-apply low-risk repairs
+    description: Reserved for the validated executor. v0.1 cannot apply changes.
