@@ -2,67 +2,69 @@
 
 AutoDoctor is an AI-assisted reliability app for Home Assistant. It watches the native
 `system_log_event` stream, fingerprints recurring errors, stores incident history, gathers
-bounded live context, and asks an AI for a conservative diagnosis and repair proposal.
+bounded live context, and can ask an explicitly configured AI provider for a conservative
+read-only diagnosis.
 
 ## Source of truth
 
-AutoDoctor must treat the **live Home Assistant instance** as its source of truth.
-Repository copies of `automations.yaml`, `scripts.yaml`, `configuration.yaml`, helpers, or entity
-inventories may be stale and must not be used to infer current entity IDs, automation IDs,
-script keys, services, or repair targets.
+AutoDoctor treats the **live Home Assistant instance** as its source of truth. Repository copies
+of `automations.yaml`, `scripts.yaml`, `configuration.yaml`, helpers, or entity inventories may be
+stale and must not be used to infer current repair targets.
 
-v0.1 therefore reads live events and live entity states only. It does not mount `/config` and
-does not read the repository's Home Assistant YAML files at runtime.
+v0.1.x reads live events and live entity states only. It does not mount `/config` and does not
+read Home Assistant YAML snapshots at runtime.
 
-Future repair versions must resolve targets from live Home Assistant/MCP data immediately before
-a change and must refuse to repair when the live target cannot be resolved unambiguously.
+## Safety boundary
 
-## v0.1 safety boundary
+**v0.1.x cannot modify Home Assistant.** The repair executor remains hard-disabled even if the
+`auto_apply_low_risk` option is enabled.
 
-**v0.1 cannot modify Home Assistant.** This is deliberate. The `auto_apply_low_risk` option
-is visible so the policy can be exercised, but the executor contains a hard deny until the
-MCP backup/validation/rollback flow is tested against the target Home Assistant instance.
+Current pipeline:
 
-This first release proves the always-on loop safely:
+`system_log_event -> dedupe -> bounded/redacted context -> optional AI diagnosis -> incident record -> dashboard`
 
-`system_log_event -> dedupe -> context -> AI -> incident record -> dashboard`
+MCP remains optional and does not provide repair execution in v0.1.x.
 
-Optional MCP support uses `ganhammar/hass-mcp-server` for connectivity and capability
-discovery only in v0.1. The next phase will add explicit automation/script identifier resolution,
-then use MCP backup, validation and restore tools rather than unrestricted filesystem access.
+## AI budget guard
+
+v0.1.2 adds fail-closed monthly AI accounting. An external provider cannot start unless the budget
+guard, a monthly budget, a lower internal stop threshold, exact model pricing, an exact model ID,
+and the provider API key are all configured.
+
+AutoDoctor reserves a conservative estimated cost **before** each AI request. If the reservation
+would cross the internal monthly stop, the request is blocked while local monitoring continues.
+Failed/aborted requests retain the reservation when exact usage is unavailable. Successful calls
+use provider-reported token counts when available. Usage is stored in `/data/autodoctor.db` and
+resets by UTC calendar month without deleting history.
+
+Model prices are never silently hard-coded: input/output prices must be entered explicitly for the
+configured model.
+
+See `DOCS.md` for configuration details.
+
+## Privacy boundary
+
+External AI context is bounded and redacted. Referenced entity IDs are pseudonymised before they
+leave Home Assistant, and `friendly_name` is excluded from external AI context.
 
 ## Feedback-loop protection
 
 AutoDoctor deliberately ignores log events whose logger name or message contains `autodoctor`.
-This prevents AutoDoctor's own warnings from becoming new AutoDoctor incidents.
-
-When performing a synthetic smoke test, do **not** put the word `autodoctor` in the test logger
-or message. A neutral logger/message such as `ha_pipeline_smoke_test` and
-`Synthetic monitor-only pipeline verification event` will exercise the pipeline correctly.
-
-## Why it does not require Watchman or Spook
-
-Both can be useful evidence sources, but AutoDoctor uses Home Assistant's native system log
-stream as its primary detector. Third-party diagnostics can be added later without becoming
-a single point of failure.
+This prevents its own warnings from becoming new incidents. Use neutral wording for synthetic
+smoke tests.
 
 ## AI providers
 
 - `none`: monitor/deduplicate only, no external AI calls.
-- `openai`: direct OpenAI API. `ai_model` must be set explicitly.
-- `anthropic`: direct Anthropic API. `ai_model` must be set explicitly.
+- `openai`: direct OpenAI API; exact model/prices/budget must be configured.
+- `anthropic`: direct Anthropic API; exact model/prices/budget must be configured.
 
-AutoDoctor intentionally has no baked-in AI model name so model/version changes cannot silently
-change behaviour. API usage is billed separately from ChatGPT/Claude consumer subscriptions.
+API usage is billed separately from consumer ChatGPT/Claude subscriptions.
 
 ## MCP
 
-For Claude/manual repair access and future safe execution, install
-`ganhammar/hass-mcp-server`, enable native Home Assistant authentication, create a dedicated
-Long-Lived Access Token, then configure its `/api/mcp` URL and token in AutoDoctor.
+AutoDoctor targets the current MCP Python SDK v2 transport. That SDK intentionally uses `httpx2`,
+not `httpx`, for Streamable HTTP clients. AutoDoctor declares `httpx2` explicitly because
+`mcp_backend.py` imports it directly.
 
-AutoDoctor targets the current MCP Python SDK v2 transport. That SDK intentionally uses
-`httpx2`, not `httpx`, for Streamable HTTP clients. AutoDoctor declares `httpx2` explicitly
-because `mcp_backend.py` imports it directly.
-
-Do not reuse an administrator's general-purpose token.
+Do not reuse an administrator's general-purpose token for future MCP work.

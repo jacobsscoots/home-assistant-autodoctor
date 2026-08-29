@@ -6,9 +6,10 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from .budget import month_bounds_utc
 from .models import Analysis, LogEvent
 
-_SCHEMA = """
+_INCIDENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS incidents (
     fingerprint TEXT PRIMARY KEY,
     first_seen REAL NOT NULL,
@@ -24,12 +25,42 @@ CREATE TABLE IF NOT EXISTS incidents (
     analysis_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_incidents_last_seen ON incidents(last_seen DESC);
+"""
+
+_AI_USAGE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ai_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL,
-    fingerprint TEXT NOT NULL
+    fingerprint TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    reserved_input_tokens INTEGER NOT NULL DEFAULT 0,
+    reserved_output_tokens INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    reserved_cost_usd REAL NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ai_usage_ts ON ai_usage(ts);
 """
+
+_REQUIRED_AI_USAGE_COLUMNS = {
+    "id",
+    "ts",
+    "fingerprint",
+    "provider",
+    "model",
+    "status",
+    "reserved_input_tokens",
+    "reserved_output_tokens",
+    "input_tokens",
+    "output_tokens",
+    "reserved_cost_usd",
+    "cost_usd",
+    "error",
+}
 
 
 class IncidentStore:
@@ -43,7 +74,40 @@ class IncidentStore:
 
     def _initialize_sync(self) -> None:
         with sqlite3.connect(self.path) as db:
-            db.executescript(_SCHEMA)
+            db.executescript(_INCIDENT_SCHEMA)
+            self._ensure_ai_usage_schema(db)
+
+    @staticmethod
+    def _ensure_ai_usage_schema(db: sqlite3.Connection) -> None:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(ai_usage)").fetchall()}
+        if not columns:
+            db.executescript(_AI_USAGE_SCHEMA)
+            return
+        if _REQUIRED_AI_USAGE_COLUMNS.issubset(columns):
+            db.executescript(_AI_USAGE_SCHEMA)
+            return
+
+        # v0.1.0/v0.1.1 stored only (ts, fingerprint). Migrate in-place while
+        # preserving historical analysis timestamps across app updates.
+        db.execute("DROP INDEX IF EXISTS idx_ai_usage_ts")
+        db.execute("DROP TABLE IF EXISTS ai_usage_legacy_v011")
+        db.execute("ALTER TABLE ai_usage RENAME TO ai_usage_legacy_v011")
+        db.executescript(_AI_USAGE_SCHEMA)
+
+        legacy_columns = {
+            row[1] for row in db.execute("PRAGMA table_info(ai_usage_legacy_v011)").fetchall()
+        }
+        if {"ts", "fingerprint"}.issubset(legacy_columns):
+            db.execute(
+                """INSERT INTO ai_usage
+                (ts, fingerprint, provider, model, status,
+                 reserved_input_tokens, reserved_output_tokens,
+                 input_tokens, output_tokens, reserved_cost_usd, cost_usd, error)
+                SELECT ts, fingerprint, '', '', 'legacy_success',
+                       0, 0, NULL, NULL, 0, 0, NULL
+                FROM ai_usage_legacy_v011"""
+            )
+        db.execute("DROP TABLE ai_usage_legacy_v011")
 
     async def record(self, fp: str, event: LogEvent) -> tuple[dict[str, Any], bool]:
         async with self._lock:
@@ -85,7 +149,160 @@ class IncidentStore:
                 "UPDATE incidents SET analysis_json = ?, last_analysis_at = ? WHERE fingerprint = ?",
                 (payload, now, fp),
             )
-            db.execute("INSERT INTO ai_usage(ts, fingerprint) VALUES (?, ?)", (now, fp))
+            db.commit()
+
+    async def mark_analysis_attempt(self, fp: str, now_ts: float | None = None) -> None:
+        now = now_ts if now_ts is not None else datetime.now(tz=timezone.utc).timestamp()
+        async with self._lock:
+            await asyncio.to_thread(self._mark_analysis_attempt_sync, fp, now)
+
+    def _mark_analysis_attempt_sync(self, fp: str, now: float) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute(
+                "UPDATE incidents SET last_analysis_at = ? WHERE fingerprint = ?",
+                (float(now), fp),
+            )
+            db.commit()
+
+    async def reserve_ai_usage(
+        self,
+        *,
+        fingerprint: str,
+        provider: str,
+        model: str,
+        reserved_input_tokens: int,
+        reserved_output_tokens: int,
+        reserved_cost_usd: float,
+        monthly_stop_usd: float,
+        now_ts: float | None = None,
+    ) -> tuple[int | None, float]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._reserve_ai_usage_sync,
+                fingerprint,
+                provider,
+                model,
+                reserved_input_tokens,
+                reserved_output_tokens,
+                reserved_cost_usd,
+                monthly_stop_usd,
+                now_ts,
+            )
+
+    def _reserve_ai_usage_sync(
+        self,
+        fingerprint: str,
+        provider: str,
+        model: str,
+        reserved_input_tokens: int,
+        reserved_output_tokens: int,
+        reserved_cost_usd: float,
+        monthly_stop_usd: float,
+        now_ts: float | None,
+    ) -> tuple[int | None, float]:
+        now = now_ts if now_ts is not None else datetime.now(tz=timezone.utc).timestamp()
+        month_start, month_end, _ = month_bounds_utc(now)
+        with sqlite3.connect(self.path) as db:
+            spent = float(
+                db.execute(
+                    """SELECT COALESCE(SUM(cost_usd), 0)
+                    FROM ai_usage
+                    WHERE ts >= ? AND ts < ? AND status != 'blocked_budget'""",
+                    (month_start, month_end),
+                ).fetchone()[0]
+            )
+            if spent + reserved_cost_usd > monthly_stop_usd + 1e-12:
+                db.execute(
+                    """INSERT INTO ai_usage
+                    (ts, fingerprint, provider, model, status,
+                     reserved_input_tokens, reserved_output_tokens,
+                     reserved_cost_usd, cost_usd, error)
+                    VALUES (?, ?, ?, ?, 'blocked_budget', ?, ?, ?, 0, ?)""",
+                    (
+                        now,
+                        fingerprint,
+                        provider,
+                        model,
+                        max(0, int(reserved_input_tokens)),
+                        max(0, int(reserved_output_tokens)),
+                        max(0.0, float(reserved_cost_usd)),
+                        f"monthly stop ${monthly_stop_usd:.8f} would be exceeded",
+                    ),
+                )
+                db.commit()
+                return None, spent
+
+            cursor = db.execute(
+                """INSERT INTO ai_usage
+                (ts, fingerprint, provider, model, status,
+                 reserved_input_tokens, reserved_output_tokens,
+                 reserved_cost_usd, cost_usd)
+                VALUES (?, ?, ?, ?, 'reserved', ?, ?, ?, ?)""",
+                (
+                    now,
+                    fingerprint,
+                    provider,
+                    model,
+                    max(0, int(reserved_input_tokens)),
+                    max(0, int(reserved_output_tokens)),
+                    max(0.0, float(reserved_cost_usd)),
+                    max(0.0, float(reserved_cost_usd)),
+                ),
+            )
+            db.commit()
+            return int(cursor.lastrowid), spent
+
+    async def finalize_ai_usage(
+        self,
+        usage_id: int,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._finalize_ai_usage_sync,
+                usage_id,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            )
+
+    def _finalize_ai_usage_sync(
+        self,
+        usage_id: int,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute(
+                """UPDATE ai_usage
+                SET status = 'succeeded', input_tokens = ?, output_tokens = ?,
+                    cost_usd = ?, error = NULL
+                WHERE id = ?""",
+                (
+                    max(0, int(input_tokens)),
+                    max(0, int(output_tokens)),
+                    max(0.0, float(cost_usd)),
+                    int(usage_id),
+                ),
+            )
+            db.commit()
+
+    async def fail_ai_usage(self, usage_id: int, error: str) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._fail_ai_usage_sync, usage_id, error)
+
+    def _fail_ai_usage_sync(self, usage_id: int, error: str) -> None:
+        with sqlite3.connect(self.path) as db:
+            # Keep cost_usd at the pre-call reservation when actual usage is
+            # unavailable. This prevents failed/aborted calls from bypassing budget.
+            db.execute(
+                "UPDATE ai_usage SET status = 'failed', error = ? WHERE id = ?",
+                (str(error)[:1000], int(usage_id)),
+            )
             db.commit()
 
     async def list_recent(self, limit: int = 100) -> list[dict[str, Any]]:
@@ -106,4 +323,43 @@ class IncidentStore:
 
     def _ai_count_since_sync(self, since_ts: float) -> int:
         with sqlite3.connect(self.path) as db:
-            return int(db.execute("SELECT COUNT(*) FROM ai_usage WHERE ts >= ?", (since_ts,)).fetchone()[0])
+            return int(
+                db.execute(
+                    "SELECT COUNT(*) FROM ai_usage WHERE ts >= ?",
+                    (since_ts,),
+                ).fetchone()[0]
+            )
+
+    async def monthly_ai_usage(self, now_ts: float | None = None) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(self._monthly_ai_usage_sync, now_ts)
+
+    def _monthly_ai_usage_sync(self, now_ts: float | None) -> dict[str, Any]:
+        now = now_ts if now_ts is not None else datetime.now(tz=timezone.utc).timestamp()
+        month_start, month_end, month = month_bounds_utc(now)
+        with sqlite3.connect(self.path) as db:
+            row = db.execute(
+                """SELECT
+                    COALESCE(SUM(CASE WHEN status != 'blocked_budget' THEN cost_usd ELSE 0 END), 0),
+                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status IN ('reserved','succeeded','failed','legacy_success') THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status = 'reserved' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN status = 'blocked_budget' THEN 1 ELSE 0 END),
+                    COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0)
+                FROM ai_usage
+                WHERE ts >= ? AND ts < ?""",
+                (month_start, month_end),
+            ).fetchone()
+        return {
+            "month_utc": month,
+            "spent_usd": float(row[0] or 0),
+            "analyses_count": int(row[1] or 0),
+            "attempts_count": int(row[2] or 0),
+            "failed_count": int(row[3] or 0),
+            "reserved_count": int(row[4] or 0),
+            "budget_blocked_count": int(row[5] or 0),
+            "input_tokens": int(row[6] or 0),
+            "output_tokens": int(row[7] or 0),
+        }

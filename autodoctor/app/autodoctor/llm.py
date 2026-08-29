@@ -5,8 +5,9 @@ from typing import Any
 
 import aiohttp
 
+from .budget import validate_ai_budget
 from .config import Settings
-from .models import Analysis
+from .models import AIResult, Analysis
 
 _SYSTEM = """You are AutoDoctor, a conservative Home Assistant reliability engineer.
 Diagnose the supplied incident using only the evidence provided. Prefer the smallest safe change.
@@ -57,8 +58,23 @@ def _analysis(data: dict[str, Any]) -> Analysis:
     )
 
 
+def _usage_token(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
 class BaseProvider:
-    async def analyze(self, prompt: str) -> Analysis | None:
+    provider_name = "none"
+    model = ""
+    max_output_tokens = 0
+
+    def reservation_input_text(self, prompt: str) -> str:
+        return prompt
+
+    async def analyze(self, prompt: str) -> AIResult | None:
         return None
 
     async def close(self) -> None:
@@ -70,6 +86,9 @@ class NoProvider(BaseProvider):
 
 
 class OpenAIProvider(BaseProvider):
+    provider_name = "openai"
+    max_output_tokens = 4000
+
     def __init__(self, api_key: str, model: str, effort: str) -> None:
         if not model.strip():
             raise RuntimeError("ai_model must be set explicitly when ai_provider=openai")
@@ -79,12 +98,15 @@ class OpenAIProvider(BaseProvider):
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         )
 
-    async def analyze(self, prompt: str) -> Analysis:
+    def reservation_input_text(self, prompt: str) -> str:
+        return _SYSTEM + "\n" + prompt
+
+    async def analyze(self, prompt: str) -> AIResult:
         body: dict[str, Any] = {
             "model": self.model,
             "instructions": _SYSTEM,
             "input": prompt,
-            "max_output_tokens": 4000,
+            "max_output_tokens": self.max_output_tokens,
             "reasoning": {"effort": self.effort},
         }
         async with self.session.post("https://api.openai.com/v1/responses", json=body, timeout=120) as response:
@@ -100,13 +122,21 @@ class OpenAIProvider(BaseProvider):
                     if content.get("type") in {"output_text", "text"} and content.get("text"):
                         parts.append(content["text"])
             text = "\n".join(parts)
-        return _analysis(_parse_json(text or "{}"))
+        usage = data.get("usage") or {}
+        return AIResult(
+            analysis=_analysis(_parse_json(text or "{}")),
+            input_tokens=_usage_token(usage.get("input_tokens")),
+            output_tokens=_usage_token(usage.get("output_tokens")),
+        )
 
     async def close(self) -> None:
         await self.session.close()
 
 
 class AnthropicProvider(BaseProvider):
+    provider_name = "anthropic"
+    max_output_tokens = 4000
+
     def __init__(self, api_key: str, model: str, effort: str) -> None:
         if not model.strip():
             raise RuntimeError("ai_model must be set explicitly when ai_provider=anthropic")
@@ -120,10 +150,13 @@ class AnthropicProvider(BaseProvider):
             }
         )
 
-    async def analyze(self, prompt: str) -> Analysis:
+    def reservation_input_text(self, prompt: str) -> str:
+        return _SYSTEM + "\n" + prompt
+
+    async def analyze(self, prompt: str) -> AIResult:
         body: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": 4000,
+            "max_tokens": self.max_output_tokens,
             "system": _SYSTEM,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -137,7 +170,12 @@ class AnthropicProvider(BaseProvider):
         text = "\n".join(
             block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
         )
-        return _analysis(_parse_json(text or "{}"))
+        usage = data.get("usage") or {}
+        return AIResult(
+            analysis=_analysis(_parse_json(text or "{}")),
+            input_tokens=_usage_token(usage.get("input_tokens")),
+            output_tokens=_usage_token(usage.get("output_tokens")),
+        )
 
     async def close(self) -> None:
         await self.session.close()
@@ -145,10 +183,12 @@ class AnthropicProvider(BaseProvider):
 
 def build_provider(settings: Settings) -> BaseProvider:
     if settings.ai_provider == "openai":
+        validate_ai_budget(settings)
         if not settings.openai_api_key:
             raise RuntimeError("ai_provider=openai but openai_api_key is empty")
         return OpenAIProvider(settings.openai_api_key, settings.ai_model, settings.ai_effort)
     if settings.ai_provider == "anthropic":
+        validate_ai_budget(settings)
         if not settings.anthropic_api_key:
             raise RuntimeError("ai_provider=anthropic but anthropic_api_key is empty")
         return AnthropicProvider(settings.anthropic_api_key, settings.ai_model, settings.ai_effort)
