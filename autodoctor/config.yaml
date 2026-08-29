@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.1.1"
+version: "0.1.2"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, deduplicates incidents, asks an AI
@@ -28,6 +28,11 @@ options:
   ai_effort: "low"
   openai_api_key: ""
   anthropic_api_key: ""
+  ai_budget_enabled: false
+  ai_monthly_budget_usd: 0.0
+  ai_monthly_stop_usd: 0.0
+  ai_input_cost_per_million_usd: 0.0
+  ai_output_cost_per_million_usd: 0.0
   mcp_enabled: false
   mcp_url: ""
   mcp_token: ""
@@ -43,6 +48,11 @@ schema:
   ai_effort: "list(low|medium|high)"
   openai_api_key: password
   anthropic_api_key: password
+  ai_budget_enabled: bool
+  ai_monthly_budget_usd: "float(0,10000)"
+  ai_monthly_stop_usd: "float(0,10000)"
+  ai_input_cost_per_million_usd: "float(0,10000)"
+  ai_output_cost_per_million_usd: "float(0,10000)"
   mcp_enabled: bool
   mcp_url: str
   mcp_token: password
