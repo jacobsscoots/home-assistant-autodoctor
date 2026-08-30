@@ -39,5 +39,5 @@ class Settings:
     def load(cls, path: str = "/data/options.json") -> "Settings":
         p = Path(path)
         data = json.loads(p.read_text()) if p.exists() else {}
-        known = {field for field in cls.__dataclass_fields__}
+        known = set(cls.__dataclass_fields__)
         return cls(**{key: value for key, value in data.items() if key in known})

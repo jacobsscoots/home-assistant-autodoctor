@@ -39,12 +39,20 @@ class Dashboard:
     async def incidents(self, request: web.Request) -> web.Response:
         return web.json_response(await self.store.list_recent(100))
 
+    @staticmethod
+    def _mcp_status(mcp: dict[str, Any]) -> str:
+        if mcp.get("connected"):
+            return "connected"
+        if not mcp.get("enabled"):
+            return "disabled"
+        return "not connected"
+
     async def index(self, request: web.Request) -> web.Response:
         incidents = await self.store.list_recent(50)
         health = await self.engine.health()
         rows = "".join(self._row(item) for item in incidents) or '<tr><td colspan="8">No incidents captured yet.</td></tr>'
         mcp = health.get("mcp", {})
-        mcp_text = "connected" if mcp.get("connected") else ("disabled" if not mcp.get("enabled") else "not connected")
+        mcp_text = self._mcp_status(mcp)
         budget = health.get("ai_budget", {})
         scheduler = health.get("ai_scheduler", {})
         memory = health.get("memory", {})

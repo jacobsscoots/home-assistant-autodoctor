@@ -187,8 +187,9 @@ def test_unknown_usage_schema_fails_closed_instead_of_rebuilding(tmp_path: Path)
         db.commit()
 
     store = IncidentStore(str(path))
+    initialize = store.initialize()
     with pytest.raises(RuntimeError, match="refusing destructive migration"):
-        asyncio.run(store.initialize())
+        asyncio.run(initialize)
 
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT mystery FROM ai_usage").fetchone()[0] == "keep-me"

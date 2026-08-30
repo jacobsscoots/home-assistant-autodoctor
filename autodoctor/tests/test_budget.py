@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import sys
+from math import inf, nan
 from pathlib import Path
 
 import pytest
@@ -37,14 +38,18 @@ def valid_settings(**overrides):
 
 
 def test_budget_validation_fails_closed() -> None:
+    budget_disabled = Settings(ai_provider="openai", ai_model="x")
+    stop_not_lower = valid_settings(ai_monthly_stop_usd=5.0)
+    zero_input_price = valid_settings(ai_input_cost_per_million_usd=0.0)
+
     with pytest.raises(RuntimeError, match="budget guard must be enabled"):
-        validate_ai_budget(Settings(ai_provider="openai", ai_model="x"))
+        validate_ai_budget(budget_disabled)
 
     with pytest.raises(RuntimeError, match="lower than"):
-        validate_ai_budget(valid_settings(ai_monthly_stop_usd=5.0))
+        validate_ai_budget(stop_not_lower)
 
     with pytest.raises(RuntimeError, match="input_cost"):
-        validate_ai_budget(valid_settings(ai_input_cost_per_million_usd=0.0))
+        validate_ai_budget(zero_input_price)
 
     validate_ai_budget(valid_settings())
 
@@ -90,10 +95,13 @@ def test_legacy_ai_usage_migrates(tmp_path: Path) -> None:
 
 
 def test_budget_validation_rejects_nan_and_infinity() -> None:
+    nan_stop = valid_settings(ai_monthly_stop_usd=nan)
+    infinite_input_price = valid_settings(ai_input_cost_per_million_usd=inf)
+
     with pytest.raises(RuntimeError, match="finite"):
-        validate_ai_budget(valid_settings(ai_monthly_stop_usd=float("nan")))
+        validate_ai_budget(nan_stop)
     with pytest.raises(RuntimeError, match="finite"):
-        validate_ai_budget(valid_settings(ai_input_cost_per_million_usd=float("inf")))
+        validate_ai_budget(infinite_input_price)
 
 
 def test_budget_usage_resets_by_calendar_month_and_survives_reopen(tmp_path: Path) -> None:

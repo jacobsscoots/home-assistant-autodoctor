@@ -19,7 +19,7 @@ class MCPBackend:
         self.url = settings.mcp_url
         self.token = settings.mcp_token
 
-    async def _session(self):
+    def _session(self):
         import httpx2
         from mcp import Client
         from mcp.client.streamable_http import streamable_http_client
@@ -38,7 +38,7 @@ class MCPBackend:
         if not self.url or not self.token:
             return {"enabled": True, "connected": False, "error": "mcp_url/mcp_token missing"}
         try:
-            http_client, client = await self._session()
+            http_client, client = self._session()
             async with http_client:
                 async with client:
                     tools = await client.list_tools()
@@ -58,8 +58,7 @@ class MCPBackend:
         except Exception as exc:
             return {"enabled": True, "connected": False, "error": str(exc)}
 
-    async def get_relevant_config(self, entity_ids: list[str]) -> dict[str, Any]:
-        # Deliberately empty in v0.1. Do not guess upstream automation_id/script key
-        # from a Home Assistant entity_id. Incorrect identifier resolution is worse
-        # than giving the AI less context.
+    def get_relevant_config(self) -> dict[str, Any]:
+        # Deliberately empty in v0.1. Incorrect identifier resolution is worse
+        # than giving the AI less context, so the caller cannot pass guessed IDs.
         return {}

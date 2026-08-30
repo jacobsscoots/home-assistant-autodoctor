@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Awaitable
 from typing import Any
 
 import aiohttp
@@ -66,6 +68,15 @@ def _usage_token(value: Any) -> int | None:
     return number if number >= 0 else None
 
 
+async def _completed_none() -> None:
+    await asyncio.sleep(0)
+
+
+async def _completed_analysis() -> AIResult | None:
+    await asyncio.sleep(0)
+    return None
+
+
 class BaseProvider:
     provider_name = "none"
     model = ""
@@ -74,11 +85,12 @@ class BaseProvider:
     def reservation_input_text(self, prompt: str) -> str:
         return prompt
 
-    async def analyze(self, prompt: str) -> AIResult | None:
-        return None
+    def analyze(self, prompt: str) -> Awaitable[AIResult | None]:
+        _ = prompt
+        return _completed_analysis()
 
-    async def close(self) -> None:
-        return None
+    def close(self) -> Awaitable[None]:
+        return _completed_none()
 
 
 class NoProvider(BaseProvider):
