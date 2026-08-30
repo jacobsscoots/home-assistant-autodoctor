@@ -11,6 +11,12 @@ configuration:
   max_ai_analyses_per_hour:
     name: AI attempts per hour
     description: Global attempt-rate protection, including budget-blocked attempts, independent from the monthly budget.
+  max_ai_analyses_per_family_per_hour:
+    name: AI attempts per incident family per hour
+    description: Fairness cap that prevents one noisy logger/integration family from consuming the whole global hourly allowance.
+  ai_startup_backlog_grace_seconds:
+    name: AI startup backlog grace
+    description: Seconds after startup during which old incidents keep recording locally but are deferred from AI; incidents first seen after startup remain eligible.
   ai_provider:
     name: AI provider
     description: Monitor only, OpenAI API, or Anthropic API.
@@ -49,4 +55,4 @@ configuration:
     name: Notify on new incident
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.1.2 cannot apply changes.
+    description: Reserved for the validated executor. v0.1.3 cannot apply changes.

@@ -46,10 +46,22 @@ class Dashboard:
         mcp = health.get("mcp", {})
         mcp_text = "connected" if mcp.get("connected") else ("disabled" if not mcp.get("enabled") else "not connected")
         budget = health.get("ai_budget", {})
+        scheduler = health.get("ai_scheduler", {})
         budget_text = (
             f"${budget.get('spent_usd', 0):.4f} / ${budget.get('stop_threshold_usd', 0):.2f}"
             if budget.get("enabled")
             else "locked"
+        )
+        remaining_text = (
+            f"${budget.get('remaining_to_stop_usd', 0):.4f}"
+            if budget.get("enabled")
+            else "locked"
+        )
+        token_text = f"{int(budget.get('input_tokens', 0))} / {int(budget.get('output_tokens', 0))}"
+        deferral_text = (
+            f"{int(scheduler.get('backlog_deferred', 0))} / "
+            f"{int(scheduler.get('family_deferred', 0))} / "
+            f"{int(scheduler.get('hourly_deferred', 0))}"
         )
         body = f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -70,12 +82,17 @@ small{{color:#9ca3af}}
 <div><div class="k">Open incidents</div><div class="v">{health['open_incidents']}</div></div>
 <div><div class="k">AI</div><div class="v">{html.escape(health['ai_provider'])}</div></div>
 <div><div class="k">AI spend / stop</div><div class="v">{html.escape(budget_text)}</div></div>
+<div><div class="k">AI budget remaining</div><div class="v">{html.escape(remaining_text)}</div></div>
 <div><div class="k">AI analyses</div><div class="v">{int(budget.get('analyses_count', 0))}</div></div>
+<div><div class="k">Tokens in / out</div><div class="v">{html.escape(token_text)}</div></div>
 <div><div class="k">Budget blocked</div><div class="v">{int(budget.get('budget_blocked_count', 0))}</div></div>
+<div><div class="k">Family cap / hour</div><div class="v">{int(scheduler.get('max_ai_analyses_per_family_per_hour', 0))}</div></div>
+<div><div class="k">Startup grace</div><div class="v">{int(scheduler.get('startup_grace_remaining_seconds', 0))}s</div></div>
+<div><div class="k">Deferrals B / F / H</div><div class="v">{html.escape(deferral_text)}</div></div>
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.1.2 can monitor and store AI diagnoses, but the repair executor remains hard-disabled.</div>
+<div class="card"><strong>Safety:</strong> v0.1.3 can monitor and store AI diagnoses, but the repair executor remains hard-disabled. Startup backlog and per-family fairness protect AI capacity from noisy incident bursts.</div>
 <div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")

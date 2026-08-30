@@ -8,6 +8,7 @@ from typing import Any
 
 from .budget import month_bounds_utc
 from .models import Analysis, LogEvent
+from .scheduler import incident_family
 
 _INCIDENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS incidents (
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS ai_usage (
     fingerprint TEXT NOT NULL,
     provider TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
+    family TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     reserved_input_tokens INTEGER NOT NULL DEFAULT 0,
     reserved_output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -44,9 +46,10 @@ CREATE TABLE IF NOT EXISTS ai_usage (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ai_usage_ts ON ai_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_family_ts ON ai_usage(family, ts);
 """
 
-_REQUIRED_AI_USAGE_COLUMNS = {
+_V012_AI_USAGE_COLUMNS = {
     "id",
     "ts",
     "fingerprint",
@@ -61,6 +64,8 @@ _REQUIRED_AI_USAGE_COLUMNS = {
     "cost_usd",
     "error",
 }
+_REQUIRED_AI_USAGE_COLUMNS = _V012_AI_USAGE_COLUMNS | {"family"}
+_LEGACY_AI_USAGE_COLUMNS = {"ts", "fingerprint"}
 
 
 class IncidentStore:
@@ -78,36 +83,72 @@ class IncidentStore:
             self._ensure_ai_usage_schema(db)
 
     @staticmethod
+    def _backfill_ai_usage_families(db: sqlite3.Connection) -> None:
+        rows = db.execute(
+            """SELECT u.id, i.name, i.source
+            FROM ai_usage AS u
+            LEFT JOIN incidents AS i ON i.fingerprint = u.fingerprint
+            WHERE COALESCE(u.family, '') = ''"""
+        ).fetchall()
+        updates: list[tuple[str, int]] = []
+        for usage_id, name, source in rows:
+            if name is None and source is None:
+                continue
+            family = incident_family(str(name or ""), str(source or ""))
+            if family != "unknown":
+                updates.append((family, int(usage_id)))
+        if updates:
+            db.executemany("UPDATE ai_usage SET family = ? WHERE id = ?", updates)
+
+    @staticmethod
     def _ensure_ai_usage_schema(db: sqlite3.Connection) -> None:
         columns = {row[1] for row in db.execute("PRAGMA table_info(ai_usage)").fetchall()}
         if not columns:
             db.executescript(_AI_USAGE_SCHEMA)
             return
+
         if _REQUIRED_AI_USAGE_COLUMNS.issubset(columns):
             db.executescript(_AI_USAGE_SCHEMA)
+            IncidentStore._backfill_ai_usage_families(db)
+            db.commit()
             return
 
-        # v0.1.0/v0.1.1 stored only (ts, fingerprint). Migrate in-place while
-        # preserving historical analysis timestamps across app updates.
-        db.execute("DROP INDEX IF EXISTS idx_ai_usage_ts")
-        db.execute("DROP TABLE IF EXISTS ai_usage_legacy_v011")
-        db.execute("ALTER TABLE ai_usage RENAME TO ai_usage_legacy_v011")
-        db.executescript(_AI_USAGE_SCHEMA)
+        # v0.1.2 already has the full budget ledger. Add only the new family
+        # column in-place so successful/failed reservations and token history
+        # survive the v0.1.3 scheduler upgrade.
+        if _V012_AI_USAGE_COLUMNS.issubset(columns):
+            db.execute("ALTER TABLE ai_usage ADD COLUMN family TEXT NOT NULL DEFAULT ''")
+            db.executescript(_AI_USAGE_SCHEMA)
+            IncidentStore._backfill_ai_usage_families(db)
+            db.commit()
+            return
 
-        legacy_columns = {
-            row[1] for row in db.execute("PRAGMA table_info(ai_usage_legacy_v011)").fetchall()
-        }
-        if {"ts", "fingerprint"}.issubset(legacy_columns):
+        # v0.1.0/v0.1.1 stored only (ts, fingerprint). Preserve those rows as
+        # zero-cost historical successes. Refuse any unknown schema rather than
+        # guessing and risking destructive migration.
+        if columns == _LEGACY_AI_USAGE_COLUMNS:
+            db.execute("DROP INDEX IF EXISTS idx_ai_usage_ts")
+            db.execute("DROP TABLE IF EXISTS ai_usage_legacy_v011")
+            db.execute("ALTER TABLE ai_usage RENAME TO ai_usage_legacy_v011")
+            db.executescript(_AI_USAGE_SCHEMA)
             db.execute(
                 """INSERT INTO ai_usage
-                (ts, fingerprint, provider, model, status,
+                (ts, fingerprint, provider, model, family, status,
                  reserved_input_tokens, reserved_output_tokens,
                  input_tokens, output_tokens, reserved_cost_usd, cost_usd, error)
-                SELECT ts, fingerprint, '', '', 'legacy_success',
+                SELECT ts, fingerprint, '', '', '', 'legacy_success',
                        0, 0, NULL, NULL, 0, 0, NULL
                 FROM ai_usage_legacy_v011"""
             )
-        db.execute("DROP TABLE ai_usage_legacy_v011")
+            IncidentStore._backfill_ai_usage_families(db)
+            db.execute("DROP TABLE ai_usage_legacy_v011")
+            db.commit()
+            return
+
+        raise RuntimeError(
+            "Unsupported ai_usage schema; refusing destructive migration. "
+            f"Columns: {sorted(columns)}"
+        )
 
     async def record(self, fp: str, event: LogEvent) -> tuple[dict[str, Any], bool]:
         async with self._lock:
@@ -175,6 +216,7 @@ class IncidentStore:
         reserved_cost_usd: float,
         monthly_stop_usd: float,
         now_ts: float | None = None,
+        family: str = "",
     ) -> tuple[int | None, float]:
         async with self._lock:
             return await asyncio.to_thread(
@@ -187,6 +229,7 @@ class IncidentStore:
                 reserved_cost_usd,
                 monthly_stop_usd,
                 now_ts,
+                family,
             )
 
     def _reserve_ai_usage_sync(
@@ -199,9 +242,11 @@ class IncidentStore:
         reserved_cost_usd: float,
         monthly_stop_usd: float,
         now_ts: float | None,
+        family: str,
     ) -> tuple[int | None, float]:
         now = now_ts if now_ts is not None else datetime.now(tz=timezone.utc).timestamp()
         month_start, month_end, _ = month_bounds_utc(now)
+        safe_family = str(family or "unknown")[:200]
         with sqlite3.connect(self.path) as db:
             spent = float(
                 db.execute(
@@ -214,15 +259,16 @@ class IncidentStore:
             if spent + reserved_cost_usd > monthly_stop_usd + 1e-12:
                 db.execute(
                     """INSERT INTO ai_usage
-                    (ts, fingerprint, provider, model, status,
+                    (ts, fingerprint, provider, model, family, status,
                      reserved_input_tokens, reserved_output_tokens,
                      reserved_cost_usd, cost_usd, error)
-                    VALUES (?, ?, ?, ?, 'blocked_budget', ?, ?, ?, 0, ?)""",
+                    VALUES (?, ?, ?, ?, ?, 'blocked_budget', ?, ?, ?, 0, ?)""",
                     (
                         now,
                         fingerprint,
                         provider,
                         model,
+                        safe_family,
                         max(0, int(reserved_input_tokens)),
                         max(0, int(reserved_output_tokens)),
                         max(0.0, float(reserved_cost_usd)),
@@ -234,15 +280,16 @@ class IncidentStore:
 
             cursor = db.execute(
                 """INSERT INTO ai_usage
-                (ts, fingerprint, provider, model, status,
+                (ts, fingerprint, provider, model, family, status,
                  reserved_input_tokens, reserved_output_tokens,
                  reserved_cost_usd, cost_usd)
-                VALUES (?, ?, ?, ?, 'reserved', ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?)""",
                 (
                     now,
                     fingerprint,
                     provider,
                     model,
+                    safe_family,
                     max(0, int(reserved_input_tokens)),
                     max(0, int(reserved_output_tokens)),
                     max(0.0, float(reserved_cost_usd)),
@@ -329,6 +376,36 @@ class IncidentStore:
                     (since_ts,),
                 ).fetchone()[0]
             )
+
+    async def ai_count_for_family_since(self, family: str, since_ts: float) -> int:
+        async with self._lock:
+            return await asyncio.to_thread(self._ai_count_for_family_since_sync, family, since_ts)
+
+    def _ai_count_for_family_since_sync(self, family: str, since_ts: float) -> int:
+        with sqlite3.connect(self.path) as db:
+            return int(
+                db.execute(
+                    "SELECT COUNT(*) FROM ai_usage WHERE family = ? AND ts >= ?",
+                    (str(family), float(since_ts)),
+                ).fetchone()[0]
+            )
+
+    async def ai_family_counts_since(self, since_ts: float) -> dict[str, int]:
+        async with self._lock:
+            return await asyncio.to_thread(self._ai_family_counts_since_sync, since_ts)
+
+    def _ai_family_counts_since_sync(self, since_ts: float) -> dict[str, int]:
+        with sqlite3.connect(self.path) as db:
+            rows = db.execute(
+                """SELECT family, COUNT(*)
+                FROM ai_usage
+                WHERE ts >= ? AND family != ''
+                GROUP BY family
+                ORDER BY COUNT(*) DESC, family ASC
+                LIMIT 20""",
+                (float(since_ts),),
+            ).fetchall()
+        return {str(family): int(count) for family, count in rows}
 
     async def monthly_ai_usage(self, now_ts: float | None = None) -> dict[str, Any]:
         async with self._lock:

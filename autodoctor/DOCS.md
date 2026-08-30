@@ -70,6 +70,51 @@ Existing `max_ai_analyses_per_hour`, `analysis_cooldown_seconds`, and
 attempts also start the per-incident cooldown so a repeating HA error cannot create a tight retry
 loop.
 
+## AI scheduling fairness and backlog control (v0.1.3+)
+
+`max_ai_analyses_per_family_per_hour` limits one logger/integration family inside the global
+rolling-hour allowance. AutoDoctor derives a coarse family locally from the logger name:
+
+- `kasa.smart.smartdevice` and `kasa.protocol` are both family `kasa`;
+- `homeassistant.components.tplink.*` is family `homeassistant.components.tplink`;
+- `custom_components.example.*` is family `custom_components.example`.
+
+The family value is used only for local scheduling/accounting. It does not replace the incident
+fingerprint and is not added to the external AI prompt.
+
+The effective per-family cap can never exceed the configured global hourly cap. With a global
+limit of 6 and a family limit of 2, one noisy family can consume at most two attempt slots in a
+rolling hour, leaving capacity for other incident families.
+
+`ai_startup_backlog_grace_seconds` prevents a restart or provider-enable cycle from immediately
+spending AI capacity on every old eligible incident. During this grace window:
+
+- all incidents still record and deduplicate normally;
+- incidents first seen before the current AutoDoctor process started are deferred from AI;
+- incidents first seen after the current process started remain eligible and can reach their
+  normal occurrence threshold.
+
+The default grace is 300 seconds. Set it to 0 only when startup backlog protection is deliberately
+not wanted.
+
+Scheduler health exposes the configured global/family limits, grace remaining, deferral counters,
+and recent family attempt counts. These are observability fields only and do not alter incident
+history.
+
+## Safe AI usage logging (v0.1.3+)
+
+AutoDoctor logs cost/accounting metadata without logging prompts or credentials. Reservation logs
+include the incident fingerprint, local family, provider/model, conservative input estimate,
+maximum output reservation, reserved cost, spend before the call, and remaining internal budget.
+
+After a successful call it logs input/output token counts, whether each count came from the
+provider or the conservative reservation fallback, reserved cost, reconciled cost, monthly spend,
+and remaining budget. Failed calls log only the retained reservation/spend information before the
+existing exception log.
+
+These messages are intended to make token/cost verification possible even when Home Assistant
+Ingress cannot be reached from a diagnostic shell/container.
+
 ### OpenAI
 
 Set `ai_provider: openai`, provide an OpenAI API key, enter the exact model ID in `ai_model`, and

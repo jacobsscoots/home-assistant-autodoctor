@@ -27,9 +27,9 @@ MCP remains optional and does not provide repair execution in v0.1.x.
 
 ## AI budget guard
 
-v0.1.2 adds fail-closed monthly AI accounting. An external provider cannot start unless the budget
-guard, a monthly budget, a lower internal stop threshold, exact model pricing, an exact model ID,
-and the provider API key are all configured.
+v0.1.2 added fail-closed monthly AI accounting. An external provider cannot start unless the
+budget guard, a monthly budget, a lower internal stop threshold, exact model pricing, an exact
+model ID, and the provider API key are all configured.
 
 AutoDoctor reserves a conservative estimated cost **before** each AI request. If the reservation
 would cross the internal monthly stop, the request is blocked while local monitoring continues.
@@ -39,6 +39,23 @@ resets by UTC calendar month without deleting history.
 
 Model prices are never silently hard-coded: input/output prices must be entered explicitly for the
 configured model.
+
+## AI scheduling fairness
+
+v0.1.3 adds two independent protections against noisy integrations consuming all AI capacity:
+
+- a per-family hourly cap groups related logger children (for example `kasa.smart.*`) and limits
+  how many attempts that family can consume inside the global rolling-hour allowance;
+- a startup backlog grace window keeps old incidents recording/deduplicating locally after an app
+  restart while prioritising incidents first seen after the current process started.
+
+The global hourly limit, per-incident cooldown, family cap, startup backlog guard, and monthly
+budget are independent brakes. None of them stop local monitoring or incident persistence.
+
+v0.1.3 also logs safe AI accounting metadata after reservations and successful/failed calls:
+estimated input tokens, maximum output reservation, provider-returned token counts when available,
+reserved cost, reconciled cost, monthly spend, and remaining internal budget. Prompts, API keys,
+authorisation headers, and raw outbound context are not logged by these accounting messages.
 
 See `DOCS.md` for configuration details.
 
