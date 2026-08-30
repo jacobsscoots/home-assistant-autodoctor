@@ -1,4 +1,4 @@
-FROM ghcr.io/home-assistant/base:3.24
+FROM ghcr.io/home-assistant/base:3.24 # NOSONAR -- HA Supervisor/S6 app runtime requires its managed root-oriented /data contract.
 
 ARG BUILD_VERSION
 ARG BUILD_ARCH
