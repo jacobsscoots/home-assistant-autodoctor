@@ -1,4 +1,6 @@
-FROM ghcr.io/home-assistant/base:3.24 # NOSONAR -- HA Supervisor/S6 app runtime requires its managed root-oriented /data contract.
+# Home Assistant's supported app base includes S6-Overlay and uses a root-oriented runtime contract.
+# Official HA apps likewise use root where S6/runtime hardware or persistent-volume access requires it.
+FROM ghcr.io/home-assistant/base:3.24
 
 ARG BUILD_VERSION
 ARG BUILD_ARCH
@@ -21,8 +23,8 @@ COPY app /app
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 
-# Home Assistant's base runtime and Supervisor-managed /data are root-oriented.
-# Keep that compatibility explicit while allowing a future verified non-root override.
+# /data is a Supervisor-managed persistent volume and the HA base runtime is S6-oriented.
+# Keep the supported root runtime explicit; do not substitute an unverified non-root user.
 USER ${APP_USER}
 
 CMD ["/run.sh"]
