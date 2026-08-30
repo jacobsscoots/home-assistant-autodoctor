@@ -79,4 +79,4 @@ configuration:
     name: Notify on new incident
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.1.5 still cannot apply changes.
+    description: Reserved for the validated executor. v0.1.6 still cannot apply changes.
