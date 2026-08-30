@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -29,8 +28,8 @@ DEFAULT_EXPIRY_DAYS: dict[str, int] = {
     "deprecated": 1,
 }
 
-_ENTITY = re.compile(r"\b[a-z_]+\.[a-zA-Z0-9_]+\b")
-_TOKEN = re.compile(r"[a-zA-Z0-9_]{3,}")
+_ENTITY = re.compile(r"\b[a-z_]+\.\w+\b")
+_TOKEN = re.compile(r"\w{3,}")
 
 
 def trust_score(trust_class: str) -> float:
@@ -76,8 +75,6 @@ def pattern_signature(event: LogEvent, family: str) -> tuple[str, str]:
         broad = normalize_for_fingerprint(_ENTITY.sub("<ENTITY>", combined))[:400]
         material = f"{family}|{label}|{broad}"
     else:
-        # Recognised failure classes intentionally group changing device IDs,
-        # addresses, module lists and timestamps into one local memory pattern.
         material = f"{family}|{label}"
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:10]
     return f"{family}/{label}/{digest}", label
@@ -106,11 +103,32 @@ def fts_query(text: str, family: str = "", pattern_label: str = "") -> str:
     return " OR ".join(f'"{term}"' for term in terms)
 
 
-def effective_score(item: dict[str, Any], *, family: str, pattern_key: str, now: float) -> float:
+def _memory_is_inactive(item: dict[str, Any], now: float) -> bool:
     if item.get("trust_class") == "deprecated" or item.get("superseded_by"):
-        return -1e9
+        return True
     expires_at = float(item.get("expires_at") or 0)
-    if expires_at and expires_at <= now:
+    return bool(expires_at and expires_at <= now)
+
+
+def _freshness_bonus(item: dict[str, Any], now: float) -> float:
+    last = float(item.get("last_confirmed_at") or item.get("verified_at") or item.get("created_at") or 0)
+    if not last:
+        return 0.0
+    age_days = max(0.0, (now - last) / 86400.0)
+    return max(0.0, 12.0 - min(12.0, age_days / 30.0))
+
+
+def _outcome_adjustment(item: dict[str, Any]) -> float:
+    outcome = str(item.get("outcome") or "")
+    if outcome in {"fixed_manual", "fixed_verified"}:
+        return 8.0
+    if outcome in {"failed", "worsened"}:
+        return -4.0
+    return 0.0
+
+
+def effective_score(item: dict[str, Any], *, family: str, pattern_key: str, now: float) -> float:
+    if _memory_is_inactive(item, now):
         return -1e9
 
     score = float(item.get("trust_score") or trust_score(str(item.get("trust_class") or ""))) * 40.0
@@ -118,18 +136,7 @@ def effective_score(item: dict[str, Any], *, family: str, pattern_key: str, now:
         score += 45.0
     if family and item.get("family") == family:
         score += 18.0
-
-    last = float(item.get("last_confirmed_at") or item.get("verified_at") or item.get("created_at") or 0)
-    if last:
-        age_days = max(0.0, (now - last) / 86400.0)
-        score += max(0.0, 12.0 - min(12.0, age_days / 30.0))
-
-    outcome = str(item.get("outcome") or "")
-    if outcome in {"fixed_manual", "fixed_verified"}:
-        score += 8.0
-    elif outcome in {"failed", "worsened"}:
-        score -= 4.0
-    return score
+    return score + _freshness_bonus(item, now) + _outcome_adjustment(item)
 
 
 def safe_memory_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -155,26 +162,41 @@ def safe_memory_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _encoded_memory(item: dict[str, Any]) -> str:
+    return json.dumps(item, separators=(",", ":"), ensure_ascii=False)
+
+
+def _trim_memory_narrative(item: dict[str, Any]) -> dict[str, Any]:
+    trimmed = dict(item)
+    for field in ("resolution", "verification", "root_cause"):
+        value = str(trimmed.get(field) or "")
+        if len(value) > 300:
+            trimmed[field] = value[:300] + "…"
+    return trimmed
+
+
+def _fit_first_memory(item: dict[str, Any], remaining: int) -> dict[str, Any] | None:
+    if remaining < 400:
+        return None
+    trimmed = _trim_memory_narrative(item)
+    return trimmed if len(_encoded_memory(trimmed)) <= remaining else None
+
+
 def bounded_memory(items: list[dict[str, Any]], max_chars: int) -> list[dict[str, Any]]:
     remaining = max(0, int(max_chars))
     output: list[dict[str, Any]] = []
     for item in items:
         safe = safe_memory_item(item)
-        encoded = json.dumps(safe, separators=(",", ":"), ensure_ascii=False)
-        if len(encoded) > remaining:
-            if not output and remaining >= 400:
-                # Keep one useful memory rather than returning nothing. Trim only
-                # narrative fields; provenance/trust metadata stays intact.
-                for field in ("resolution", "verification", "root_cause"):
-                    value = str(safe.get(field) or "")
-                    if len(value) > 300:
-                        safe[field] = value[:300] + "…"
-                encoded = json.dumps(safe, separators=(",", ":"), ensure_ascii=False)
-                if len(encoded) <= remaining:
-                    output.append(safe)
-            break
-        output.append(safe)
-        remaining -= len(encoded)
+        encoded = _encoded_memory(safe)
+        if len(encoded) <= remaining:
+            output.append(safe)
+            remaining -= len(encoded)
+            continue
+
+        fitted = None if output else _fit_first_memory(safe, remaining)
+        if fitted is not None:
+            output.append(fitted)
+        break
     return output
 
 
@@ -281,7 +303,7 @@ SEED_KNOWLEDGE: tuple[dict[str, Any], ...] = (
 )
 
 
-def seed_payload(record: dict[str, Any], *, now: float) -> dict[str, Any]:
+def seed_payload(record: dict[str, Any]) -> dict[str, Any]:
     verified_at = utc_timestamp(str(record["verified_at"]))
     trust_class = str(record["trust_class"])
     return {
