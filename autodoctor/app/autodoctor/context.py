@@ -51,6 +51,10 @@ _ENTITY_DOMAINS = frozenset(
     }
 )
 
+_LOCATION_STATE_DOMAINS = frozenset({"person", "device_tracker"})
+_FREE_TEXT_STATE_DOMAINS = frozenset({"input_text", "text"})
+_SAFE_LOCATION_STATES = frozenset({"home", "not_home", "unknown", "unavailable"})
+
 
 def _is_supported_entity(candidate: str) -> bool:
     return candidate.partition(".")[0] in _ENTITY_DOMAINS
@@ -70,6 +74,18 @@ def _alias_match(match: re.Match[str], aliases: dict[str, str]) -> str:
 def _sanitize_text(text: str, aliases: dict[str, str]) -> str:
     aliased = _ENTITY_CANDIDATE.sub(lambda match: _alias_match(match, aliases), text)
     return redact(aliased)
+
+
+def sanitize_state_value(entity_id: str, value: Any, aliases: dict[str, str]) -> Any:
+    if value is None:
+        return None
+    domain = entity_id.partition(".")[0]
+    raw = str(value)
+    if domain in _FREE_TEXT_STATE_DOMAINS:
+        return "<REDACTED_TEXT_STATE>"
+    if domain in _LOCATION_STATE_DOMAINS and raw.lower() not in _SAFE_LOCATION_STATES:
+        return "<REDACTED_LOCATION_STATE>"
+    return _sanitize_text(raw, aliases)[:256]
 
 
 async def collect_context(
@@ -96,7 +112,7 @@ async def collect_context(
         else:
             attrs = state.get("attributes", {})
             states[alias] = {
-                "state": state.get("state"),
+                "state": sanitize_state_value(entity_id, state.get("state"), aliases),
                 "last_changed": state.get("last_changed"),
                 "device_class": attrs.get("device_class"),
             }

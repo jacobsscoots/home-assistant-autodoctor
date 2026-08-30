@@ -5,12 +5,15 @@ configuration:
   min_occurrences_for_ai:
     name: Occurrences before AI analysis
     description: Repeated non-critical incidents must reach this count before an AI call.
+  max_incidents_retained:
+    name: Maximum retained incidents
+    description: Caps distinct incident fingerprints retained in the local database; the oldest are removed first.
   analysis_cooldown_seconds:
     name: Per-incident AI attempt cooldown
     description: Minimum seconds before the same incident fingerprint can make another AI attempt, including failures or budget blocks.
   max_ai_analyses_per_hour:
     name: AI attempts per hour
-    description: Global attempt-rate protection, including budget-blocked attempts, independent from the monthly budget.
+    description: Global provider-attempt protection. Budget-blocked reservations are tracked separately and do not consume this hourly allowance.
   max_ai_analyses_per_family_per_hour:
     name: AI attempts per incident family per hour
     description: Fairness cap that prevents one noisy logger/integration family from consuming the whole global hourly allowance.
@@ -48,6 +51,9 @@ configuration:
   memory_enabled:
     name: Enable local AutoDoctor memory
     description: Retrieves bounded, privacy-safe historical knowledge and observed topology from the local SQLite database before AI diagnosis.
+  memory_seed_enabled:
+    name: Install bundled example memory
+    description: Opt-in only. Fresh databases do not install the repository bundled seed knowledge unless this is enabled.
   memory_max_items:
     name: Memory items per AI diagnosis
     description: Maximum number of ranked historical knowledge records inserted into one AI prompt.
@@ -73,4 +79,4 @@ configuration:
     name: Notify on new incident
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.1.5 still cannot apply changes.
+    description: Reserved for the validated executor. v0.1.6 still cannot apply changes.

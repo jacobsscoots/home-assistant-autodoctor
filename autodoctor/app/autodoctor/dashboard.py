@@ -12,6 +12,21 @@ from .engine import AutoDoctorEngine
 from .store import IncidentStore
 
 
+# Home Assistant's ingress contract documents this fixed Supervisor proxy source address.
+_INGRESS_PROXY_IP = "172.30.32.2"  # NOSONAR - fixed HA ingress proxy, not a configurable remote endpoint
+
+
+def ingress_remote_allowed(remote: str | None) -> bool:
+    return remote == _INGRESS_PROXY_IP
+
+
+@web.middleware
+async def ingress_only(request: web.Request, handler):
+    if not ingress_remote_allowed(request.remote):
+        raise web.HTTPForbidden(text="AutoDoctor dashboard is available through Home Assistant ingress only.")
+    return await handler(request)
+
+
 class Dashboard:
     def __init__(self, settings: Settings, store: IncidentStore, engine: AutoDoctorEngine) -> None:
         self.settings = settings
@@ -20,7 +35,7 @@ class Dashboard:
         self.runner: web.AppRunner | None = None
 
     async def start(self) -> None:
-        app = web.Application()
+        app = web.Application(middlewares=[ingress_only])
         app.router.add_get("/", self.index)
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/incidents", self.incidents)
@@ -107,7 +122,7 @@ small{{color:#9ca3af}}
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.1.5 uses bounded local history and observed topology to improve read-only diagnoses. Historical memory is evidence, not authority; the repair executor remains hard-disabled.</div>
+<div class="card"><strong>Safety:</strong> v0.1.6 uses bounded local history and observed topology to improve read-only diagnoses. Historical memory is evidence, not authority; the repair executor remains hard-disabled.</div>
 <div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Pattern</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")

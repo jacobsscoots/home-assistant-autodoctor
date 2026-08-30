@@ -9,6 +9,7 @@ from pathlib import Path
 class Settings:
     min_level: str = "ERROR"
     min_occurrences_for_ai: int = 2
+    max_incidents_retained: int = 5000
     analysis_cooldown_seconds: int = 900
     max_ai_analyses_per_hour: int = 12
     max_ai_analyses_per_family_per_hour: int = 2
@@ -24,6 +25,7 @@ class Settings:
     ai_input_cost_per_million_usd: float = 0.0
     ai_output_cost_per_million_usd: float = 0.0
     memory_enabled: bool = True
+    memory_seed_enabled: bool = False
     memory_max_items: int = 5
     memory_max_chars: int = 6000
     memory_ai_hypothesis_expiry_days: int = 30

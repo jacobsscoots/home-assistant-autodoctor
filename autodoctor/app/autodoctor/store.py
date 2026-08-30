@@ -157,8 +157,9 @@ _CONTROLLER_DOMAINS = {"automation", "script", "scene"}
 
 
 class IncidentStore:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, max_incidents_retained: int = 5000) -> None:
         self.path = path
+        self.max_incidents_retained = max(1, int(max_incidents_retained))
         self._lock = asyncio.Lock()
         self.fts_available = False
 
@@ -173,6 +174,7 @@ class IncidentStore:
             db.executescript(_MEMORY_SCHEMA)
             self._ensure_fts(db)
             self._seed_knowledge(db)
+            self._prune_incidents_sync(db)
             db.commit()
 
     def _ensure_incident_schema(self, db: sqlite3.Connection) -> None:
@@ -316,6 +318,30 @@ class IncidentStore:
             record = seed_payload(seed)
             self._upsert_knowledge_sync(db, record)
 
+    def _prune_incidents_sync(
+        self,
+        db: sqlite3.Connection,
+        keep_fingerprint: str | None = None,
+    ) -> None:
+        total = int(db.execute("SELECT COUNT(*) FROM incidents").fetchone()[0])
+        excess = total - self.max_incidents_retained
+        if excess <= 0:
+            return
+        if keep_fingerprint:
+            rows = db.execute(
+                """SELECT fingerprint FROM incidents
+                WHERE fingerprint != ? ORDER BY last_seen ASC LIMIT ?""",
+                (keep_fingerprint, excess),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT fingerprint FROM incidents ORDER BY last_seen ASC LIMIT ?",
+                (excess,),
+            ).fetchall()
+        if rows:
+            db.executemany("DELETE FROM incidents WHERE fingerprint = ?", rows)
+
+
     async def record(
         self,
         fp: str,
@@ -363,6 +389,7 @@ class IncidentStore:
                         pattern_key, pattern_label, fp,
                     ),
                 )
+            self._prune_incidents_sync(db, keep_fingerprint=fp)
             db.commit()
             row = db.execute("SELECT * FROM incidents WHERE fingerprint = ?", (fp,)).fetchone()
             return dict(row), is_new
@@ -984,13 +1011,31 @@ class IncidentStore:
             rows = db.execute("SELECT * FROM incidents ORDER BY last_seen DESC LIMIT ?", (limit,)).fetchall()
             return [dict(row) for row in rows]
 
+    async def open_incident_count(self) -> int:
+        async with self._lock:
+            return await asyncio.to_thread(self._open_incident_count_sync)
+
+    def _open_incident_count_sync(self) -> int:
+        with sqlite3.connect(self.path) as db:
+            return int(
+                db.execute(
+                    "SELECT COUNT(*) FROM incidents WHERE status IN ('open','reopened')"
+                ).fetchone()[0]
+            )
+
     async def ai_count_since(self, since_ts: float) -> int:
         async with self._lock:
             return await asyncio.to_thread(self._ai_count_since_sync, since_ts)
 
     def _ai_count_since_sync(self, since_ts: float) -> int:
         with sqlite3.connect(self.path) as db:
-            return int(db.execute("SELECT COUNT(*) FROM ai_usage WHERE ts >= ?", (since_ts,)).fetchone()[0])
+            return int(
+                db.execute(
+                    """SELECT COUNT(*) FROM ai_usage
+                    WHERE ts >= ? AND status IN ('reserved','succeeded','failed','legacy_success')""",
+                    (since_ts,),
+                ).fetchone()[0]
+            )
 
     async def ai_count_for_family_since(self, family: str, since_ts: float) -> int:
         async with self._lock:
@@ -999,7 +1044,12 @@ class IncidentStore:
     def _ai_count_for_family_since_sync(self, family: str, since_ts: float) -> int:
         with sqlite3.connect(self.path) as db:
             return int(
-                db.execute("SELECT COUNT(*) FROM ai_usage WHERE family = ? AND ts >= ?", (str(family), float(since_ts))).fetchone()[0]
+                db.execute(
+                    """SELECT COUNT(*) FROM ai_usage
+                    WHERE family = ? AND ts >= ?
+                      AND status IN ('reserved','succeeded','failed','legacy_success')""",
+                    (str(family), float(since_ts)),
+                ).fetchone()[0]
             )
 
     async def ai_family_counts_since(self, since_ts: float) -> dict[str, int]:
@@ -1010,7 +1060,9 @@ class IncidentStore:
         with sqlite3.connect(self.path) as db:
             rows = db.execute(
                 """SELECT family, COUNT(*) FROM ai_usage
-                WHERE ts >= ? AND family != '' GROUP BY family
+                WHERE ts >= ? AND family != ''
+                  AND status IN ('reserved','succeeded','failed','legacy_success')
+                GROUP BY family
                 ORDER BY COUNT(*) DESC, family ASC LIMIT 20""",
                 (float(since_ts),),
             ).fetchall()

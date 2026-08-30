@@ -51,7 +51,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build Home Assistant app image
         run: |
+          APP_VERSION="$(python3 - <<'PY'
+          from pathlib import Path
+
+          for line in Path('autodoctor/config.yaml').read_text().splitlines():
+              if line.startswith('version:'):
+                  print(line.split(':', 1)[1].strip().strip('"\''))
+                  break
+          else:
+              raise SystemExit('version not found in autodoctor/config.yaml')
+          PY
+          )"
+          test -n "$APP_VERSION"
+          echo "Building AutoDoctor $APP_VERSION"
           docker build \
-            --build-arg BUILD_VERSION=0.1.5 \
+            --build-arg BUILD_VERSION="$APP_VERSION" \
             --build-arg BUILD_ARCH=amd64 \
             autodoctor
