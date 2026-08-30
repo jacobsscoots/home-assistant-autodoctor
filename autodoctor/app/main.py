@@ -22,6 +22,7 @@ async def async_main() -> None:
     store = SeedAwareIncidentStore(
         "/data/autodoctor.db",
         seed_enabled=settings.memory_seed_enabled,
+        max_incidents_retained=settings.max_incidents_retained,
     )
     ha = HomeAssistantClient()
     llm = build_provider(settings)

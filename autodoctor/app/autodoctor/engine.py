@@ -533,7 +533,7 @@ class AutoDoctorEngine:
         return True
 
     async def health(self) -> dict[str, Any]:
-        incidents = await self.store.list_recent(1000)
+        open_incidents = await self.store.open_incident_count()
         mcp = await self.mcp.health()
         usage = await self.store.monthly_ai_usage()
         memory = await self.store.memory_health()
@@ -587,7 +587,8 @@ class AutoDoctorEngine:
         return {
             "status": "ok",
             "processed_events": self.processed_events,
-            "open_incidents": sum(1 for item in incidents if item["status"] in {"open", "reopened"}),
+            "open_incidents": open_incidents,
+            "incident_retention_limit": int(self.settings.max_incidents_retained),
             "ai_provider": self.settings.ai_provider,
             "ai_model": self.settings.ai_model,
             "ai_budget": budget,

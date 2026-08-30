@@ -8,8 +8,14 @@ from .store import IncidentStore
 class SeedAwareIncidentStore(IncidentStore):
     """Incident store that only installs bundled seed knowledge when explicitly enabled."""
 
-    def __init__(self, path: str, *, seed_enabled: bool = False) -> None:
-        super().__init__(path)
+    def __init__(
+        self,
+        path: str,
+        *,
+        seed_enabled: bool = False,
+        max_incidents_retained: int = 5000,
+    ) -> None:
+        super().__init__(path, max_incidents_retained=max_incidents_retained)
         self.seed_enabled = bool(seed_enabled)
 
     def _seed_knowledge(self, db: sqlite3.Connection) -> None:

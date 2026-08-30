@@ -12,6 +12,20 @@ from .engine import AutoDoctorEngine
 from .store import IncidentStore
 
 
+_INGRESS_PROXY_IP = "172.30.32.2"
+
+
+def ingress_remote_allowed(remote: str | None) -> bool:
+    return remote == _INGRESS_PROXY_IP
+
+
+@web.middleware
+async def ingress_only(request: web.Request, handler):
+    if not ingress_remote_allowed(request.remote):
+        raise web.HTTPForbidden(text="AutoDoctor dashboard is available through Home Assistant ingress only.")
+    return await handler(request)
+
+
 class Dashboard:
     def __init__(self, settings: Settings, store: IncidentStore, engine: AutoDoctorEngine) -> None:
         self.settings = settings
@@ -20,7 +34,7 @@ class Dashboard:
         self.runner: web.AppRunner | None = None
 
     async def start(self) -> None:
-        app = web.Application()
+        app = web.Application(middlewares=[ingress_only])
         app.router.add_get("/", self.index)
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/incidents", self.incidents)
