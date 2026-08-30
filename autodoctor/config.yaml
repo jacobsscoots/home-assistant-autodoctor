@@ -36,6 +36,7 @@ options:
   ai_input_cost_per_million_usd: 0.0
   ai_output_cost_per_million_usd: 0.0
   memory_enabled: true
+  memory_seed_enabled: false
   memory_max_items: 5
   memory_max_chars: 6000
   memory_ai_hypothesis_expiry_days: 30
@@ -64,6 +65,7 @@ schema:
   ai_input_cost_per_million_usd: "float(0,10000)"
   ai_output_cost_per_million_usd: "float(0,10000)"
   memory_enabled: bool
+  memory_seed_enabled: bool
   memory_max_items: "int(1,20)"
   memory_max_chars: "int(500,20000)"
   memory_ai_hypothesis_expiry_days: "int(1,365)"

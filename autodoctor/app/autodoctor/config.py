@@ -24,6 +24,7 @@ class Settings:
     ai_input_cost_per_million_usd: float = 0.0
     ai_output_cost_per_million_usd: float = 0.0
     memory_enabled: bool = True
+    memory_seed_enabled: bool = False
     memory_max_items: int = 5
     memory_max_chars: int = 6000
     memory_ai_hypothesis_expiry_days: int = 30
