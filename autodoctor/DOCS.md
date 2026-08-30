@@ -25,6 +25,118 @@ ambiguous.
 Keep `ai_provider: none`, `mcp_enabled: false`, and `auto_apply_low_risk: false` until the monitor
 pipeline is proven stable on the target Home Assistant instance.
 
+## Local memory / RAG (v0.1.5+)
+
+`memory_enabled: true` enables local retrieval-augmented memory from `/data/autodoctor.db`.
+No extra external service or embedding API is required. Memory retrieval happens before an AI
+request and the selected history is inserted into the already bounded/redacted prompt.
+
+Recommended defaults:
+
+```yaml
+memory_enabled: true
+memory_max_items: 5
+memory_max_chars: 6000
+memory_ai_hypothesis_expiry_days: 30
+memory_quiet_outcome_seconds: 86400
+memory_worsened_recurrences: 10
+```
+
+### What is stored
+
+AutoDoctor keeps separate local tables for:
+
+- exact incidents/fingerprints;
+- broader failure-pattern keys;
+- AI usage/cost accounting;
+- trusted knowledge/resolutions;
+- persistent entity pseudonyms;
+- observed topology nodes/edges;
+- outcome history.
+
+The local SQLite database remains the source of truth. External AI calls receive only the bounded,
+sanitisied memory subset selected for that incident.
+
+### Trust and provenance
+
+Knowledge records carry a trust class and numeric weight:
+
+- `observed`
+- `ai_hypothesis`
+- `manually_verified`
+- `verified_fix`
+- `failed_fix`
+- `deprecated`
+
+Verified fixes rank above AI hypotheses. Expired, superseded and deprecated records are excluded
+from normal retrieval. The prompt explicitly says historical memory is evidence, not current fact.
+
+The initial v0.1.5 database seeds several verified historical repair patterns from the repository's
+Home Assistant incident ledger. They are tagged `manual-pre-autodoctor`; AutoDoctor does not claim
+those repairs as its own work.
+
+### Freshness / expiry
+
+Knowledge can include Home Assistant version, AutoDoctor version, integration/logger family,
+created/verified/last-confirmed timestamps, expiry and a `superseded_by` pointer. AI hypotheses
+expire after the configured number of days so an old model suggestion cannot silently become
+permanent truth.
+
+### Stable entity pseudonyms
+
+The real entity ID remains local. On first observation AutoDoctor assigns a random alias such as
+`sensor.entity_a1b2c3d4` and persists the mapping in SQLite. The same entity keeps the same alias
+across later incidents/restarts, allowing the model to recognise recurring involvement without
+receiving the private real entity ID.
+
+The alias mapping itself is never included in the AI prompt. `friendly_name` remains excluded.
+
+### Observed topology
+
+AutoDoctor builds an evidence-only topology graph from entities that actually appear together in
+incidents:
+
+- if an `automation`, `script` or `scene` is present with other entities, it may record
+  `references_in_incident` edges;
+- otherwise it records only co-occurrence, not a claimed configuration reference;
+- helpers are classified locally;
+- entities can be linked to the observed logger/integration family.
+
+Only a small relevant topology slice is inserted into a diagnosis. This graph is intentionally
+incomplete until more live evidence is observed (or a future approved read-only MCP phase enriches
+it).
+
+### Broad failure patterns
+
+Exact fingerprints still identify/deduplicate one concrete failure signature. v0.1.5 also creates
+a broader local pattern key. Recognised categories include device-query timeout, timeout,
+connection-refused, rate-limit, authentication, template error, not-found, unavailable, storage
+and parse errors.
+
+For example, Kasa device-query timeouts with changing addresses/module lists can share one pattern
+while retaining separate exact fingerprints when appropriate.
+
+### Outcome feedback
+
+After an AI hypothesis is stored:
+
+- a subsequent recurrence records `continued`;
+- sufficient post-diagnosis recurrence volume records `worsened`;
+- no recurrence inside the configured quiet window can record `quiet`.
+
+`quiet` is deliberately described to the model as **not proof of a fix**. Future verified manual or
+AutoDoctor repairs can use stronger outcomes such as fixed/failed and supersede older hypotheses.
+
+### Retrieval bounds / FTS
+
+`memory_max_items` limits the number of knowledge records per prompt and `memory_max_chars` limits
+the total memory narrative size. AutoDoctor uses local SQLite FTS5 when available and falls back to
+local lexical matching if the platform SQLite build does not provide FTS5. Monitoring must never
+fail just because FTS5 is unavailable.
+
+`/api/health` exposes memory counts, trust/outcome summaries, stable alias count, topology size,
+FTS availability and the number of matches from the most recent retrieval.
+
 ## AI budget guard (v0.1.2+)
 
 External AI is fail-closed. Selecting `openai` or `anthropic` will only start when all of the
@@ -60,15 +172,7 @@ provider-reported token usage when available. Monthly accounting uses calendar m
 persists in `/data/autodoctor.db` across restarts and updates.
 
 Budget exhaustion only disables new AI requests. Monitoring, fingerprinting, deduplication,
-SQLite incident storage, and notifications continue normally.
-
-The health endpoint/dashboard exposes the current UTC month, estimated spend, stop threshold,
-remaining allowance, analyses, failed/reserved calls, blocked calls, and token counts.
-
-Existing `max_ai_analyses_per_hour`, `analysis_cooldown_seconds`, and
-`min_occurrences_for_ai` controls remain independent secondary brakes. Failed and budget-blocked
-attempts also start the per-incident cooldown so a repeating HA error cannot create a tight retry
-loop.
+SQLite incident storage, memory and notifications continue normally.
 
 ## AI scheduling fairness and backlog control (v0.1.3+)
 
@@ -79,41 +183,21 @@ rolling-hour allowance. AutoDoctor derives a coarse family locally from the logg
 - `homeassistant.components.tplink.*` is family `homeassistant.components.tplink`;
 - `custom_components.example.*` is family `custom_components.example`.
 
-The family value is used only for local scheduling/accounting. It does not replace the incident
-fingerprint and is not added to the external AI prompt.
-
 The effective per-family cap can never exceed the configured global hourly cap. With a global
 limit of 6 and a family limit of 2, one noisy family can consume at most two attempt slots in a
 rolling hour, leaving capacity for other incident families.
 
 `ai_startup_backlog_grace_seconds` prevents a restart or provider-enable cycle from immediately
-spending AI capacity on every old eligible incident. During this grace window:
-
-- all incidents still record and deduplicate normally;
-- incidents first seen before the current AutoDoctor process started are deferred from AI;
-- incidents first seen after the current process started remain eligible and can reach their
-  normal occurrence threshold.
-
-The default grace is 300 seconds. Set it to 0 only when startup backlog protection is deliberately
-not wanted.
-
-Scheduler health exposes the configured global/family limits, grace remaining, deferral counters,
-and recent family attempt counts. These are observability fields only and do not alter incident
-history.
+spending AI capacity on every old eligible incident. During this grace window all incidents still
+record/deduplicate normally, old incidents are deferred from AI, and newly first-seen incidents can
+remain eligible.
 
 ## Safe AI usage logging (v0.1.3+)
 
 AutoDoctor logs cost/accounting metadata without logging prompts or credentials. Reservation logs
 include the incident fingerprint, local family, provider/model, conservative input estimate,
 maximum output reservation, reserved cost, spend before the call, and remaining internal budget.
-
-After a successful call it logs input/output token counts, whether each count came from the
-provider or the conservative reservation fallback, reserved cost, reconciled cost, monthly spend,
-and remaining budget. Failed calls log only the retained reservation/spend information before the
-existing exception log.
-
-These messages are intended to make token/cost verification possible even when Home Assistant
-Ingress cannot be reached from a diagnostic shell/container.
+Successful logs include provider/fallback token counts and reconciled spend.
 
 ### OpenAI
 
@@ -131,8 +215,8 @@ or pricing implicitly.
 
 Before incident context is sent externally, AutoDoctor redacts common secret/token patterns,
 email addresses, IP/MAC addresses, and long hexadecimal identifiers. Referenced Home Assistant
-entity IDs are replaced with per-prompt aliases such as `sensor.entity_1`, and `friendly_name` is
-not included in the external context.
+entity IDs are replaced with stable random pseudonyms stored only in local SQLite, and
+`friendly_name` is not included in external context.
 
 ## MCP integration
 
