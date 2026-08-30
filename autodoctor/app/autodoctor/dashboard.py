@@ -122,7 +122,7 @@ small{{color:#9ca3af}}
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.1.5 uses bounded local history and observed topology to improve read-only diagnoses. Historical memory is evidence, not authority; the repair executor remains hard-disabled.</div>
+<div class="card"><strong>Safety:</strong> v0.1.6 uses bounded local history and observed topology to improve read-only diagnoses. Historical memory is evidence, not authority; the repair executor remains hard-disabled.</div>
 <div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Pattern</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")
