@@ -29,32 +29,50 @@ class HomeAssistantClient:
     async def close(self) -> None:
         await self.session.close()
 
+    async def _subscribe_system_log(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        hello = await ws.receive_json()
+        if hello.get("type") != "auth_required":
+            raise RuntimeError(f"Unexpected websocket greeting: {hello.get('type')}")
+
+        await ws.send_json({"type": "auth", "access_token": self.token})
+        auth = await ws.receive_json()
+        if auth.get("type") != "auth_ok":
+            raise RuntimeError("Home Assistant websocket authentication failed")
+
+        await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "system_log_event"})
+        ack = await ws.receive_json()
+        if not ack.get("success"):
+            raise RuntimeError(f"system_log_event subscription failed: {ack}")
+
+    @staticmethod
+    def _message_event(msg: aiohttp.WSMessage) -> LogEvent | None:
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            return None
+        data = json.loads(msg.data)
+        if data.get("type") != "event":
+            return None
+        event = data.get("event", {})
+        return LogEvent.from_event_data(event.get("data", {}))
+
+    async def _iter_system_log_events(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+    ) -> AsyncIterator[LogEvent]:
+        async for msg in ws:
+            event = self._message_event(msg)
+            if event is not None:
+                yield event
+
     async def system_log_events(self) -> AsyncIterator[LogEvent]:
         backoff = 2
         while True:
             try:
                 async with self.session.ws_connect(self.ws_url, heartbeat=30) as ws:
-                    hello = await ws.receive_json()
-                    if hello.get("type") != "auth_required":
-                        raise RuntimeError(f"Unexpected websocket greeting: {hello.get('type')}")
-                    await ws.send_json({"type": "auth", "access_token": self.token})
-                    auth = await ws.receive_json()
-                    if auth.get("type") != "auth_ok":
-                        raise RuntimeError("Home Assistant websocket authentication failed")
-                    await ws.send_json({"id": 1, "type": "subscribe_events", "event_type": "system_log_event"})
-                    ack = await ws.receive_json()
-                    if not ack.get("success"):
-                        raise RuntimeError(f"system_log_event subscription failed: {ack}")
+                    await self._subscribe_system_log(ws)
                     _LOG.info("Watching Home Assistant system_log_event stream")
                     backoff = 2
-                    async for msg in ws:
-                        if msg.type != aiohttp.WSMsgType.TEXT:
-                            continue
-                        data = json.loads(msg.data)
-                        if data.get("type") != "event":
-                            continue
-                        event = data.get("event", {})
-                        yield LogEvent.from_event_data(event.get("data", {}))
+                    async for event in self._iter_system_log_events(ws):
+                        yield event
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
