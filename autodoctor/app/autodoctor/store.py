@@ -274,8 +274,6 @@ class IncidentStore:
             )
             self.fts_available = True
         except sqlite3.OperationalError:
-            # Monitoring and memory still work with exact/family retrieval if the
-            # platform SQLite build lacks FTS5. Never make HA monitoring depend on FTS.
             self.fts_available = False
 
     def _sync_fts_row(self, db: sqlite3.Connection, record: dict[str, Any]) -> None:
@@ -311,12 +309,11 @@ class IncidentStore:
         self._sync_fts_row(db, record)
 
     def _seed_knowledge(self, db: sqlite3.Connection) -> None:
-        now = datetime.now(tz=timezone.utc).timestamp()
         for seed in SEED_KNOWLEDGE:
             existing = db.execute("SELECT 1 FROM knowledge WHERE memory_key = ?", (seed["memory_key"],)).fetchone()
             if existing:
                 continue
-            record = seed_payload(seed, now=now)
+            record = seed_payload(seed)
             self._upsert_knowledge_sync(db, record)
 
     async def record(
@@ -548,7 +545,7 @@ class IncidentStore:
                     alias = str(row[0])
                     db.execute("UPDATE entity_aliases SET last_seen = ? WHERE entity_id = ?", (now, entity_id))
                 else:
-                    domain = entity_id.split(".", 1)[0] if "." in entity_id else "entity"
+                    domain = self._entity_domain(entity_id)
                     while True:
                         alias = f"{domain}.entity_{secrets.token_hex(4)}"
                         exists = db.execute("SELECT 1 FROM entity_aliases WHERE alias = ?", (alias,)).fetchone()
@@ -579,6 +576,95 @@ class IncidentStore:
                 float(now_ts),
             )
 
+    @staticmethod
+    def _entity_domain(entity_id: str) -> str:
+        domain = entity_id.partition(".")[0]
+        return domain or "entity"
+
+    @staticmethod
+    def _topology_kind(domain: str) -> str:
+        if domain in _CONTROLLER_DOMAINS:
+            return "controller"
+        if domain in _HELPER_DOMAINS:
+            return "helper"
+        return "entity"
+
+    @staticmethod
+    def _upsert_topology_node(
+        db: sqlite3.Connection,
+        alias: str,
+        kind: str,
+        domain: str,
+        family: str,
+        now: float,
+    ) -> None:
+        db.execute(
+            """INSERT INTO topology_nodes(alias, kind, domain, family, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(alias) DO UPDATE SET
+                kind=excluded.kind, domain=excluded.domain, family=excluded.family, last_seen=excluded.last_seen""",
+            (alias, kind, domain, family, now, now),
+        )
+
+    def _collect_topology_aliases(
+        self,
+        db: sqlite3.Connection,
+        entity_ids: list[str],
+        aliases: dict[str, str],
+        family: str,
+        family_alias: str,
+        now: float,
+    ) -> tuple[list[str], list[str]]:
+        controllers: list[str] = []
+        observed_aliases: list[str] = []
+        for entity_id in entity_ids:
+            alias = aliases.get(entity_id)
+            if not alias:
+                continue
+            domain = self._entity_domain(entity_id)
+            kind = self._topology_kind(domain)
+            self._upsert_topology_node(db, alias, kind, domain, family, now)
+            observed_aliases.append(alias)
+            if kind == "controller":
+                controllers.append(alias)
+            self._upsert_edge(db, alias, family_alias, "observed_family", now)
+        return controllers, observed_aliases
+
+    def _link_controller_edges(
+        self,
+        db: sqlite3.Connection,
+        controllers: list[str],
+        observed_aliases: list[str],
+        now: float,
+    ) -> None:
+        for controller in controllers:
+            for target in observed_aliases:
+                if target != controller:
+                    self._upsert_edge(db, controller, target, "references_in_incident", now)
+
+    def _link_cooccurrence_edges(
+        self,
+        db: sqlite3.Connection,
+        observed_aliases: list[str],
+        now: float,
+    ) -> None:
+        limited = observed_aliases[:12]
+        for index, source in enumerate(limited):
+            for target in limited[index + 1 :]:
+                self._upsert_edge(db, source, target, "co_occurs_in_incident", now)
+
+    def _link_topology_edges(
+        self,
+        db: sqlite3.Connection,
+        controllers: list[str],
+        observed_aliases: list[str],
+        now: float,
+    ) -> None:
+        if controllers:
+            self._link_controller_edges(db, controllers, observed_aliases, now)
+            return
+        self._link_cooccurrence_edges(db, observed_aliases, now)
+
     def _observe_topology_sync(
         self,
         entity_ids: list[str],
@@ -590,44 +676,11 @@ class IncidentStore:
             return
         with sqlite3.connect(self.path) as db:
             family_alias = f"family:{family}"
-            db.execute(
-                """INSERT INTO topology_nodes(alias, kind, domain, family, first_seen, last_seen)
-                VALUES (?, 'family', '', ?, ?, ?)
-                ON CONFLICT(alias) DO UPDATE SET last_seen=excluded.last_seen""",
-                (family_alias, family, now, now),
+            self._upsert_topology_node(db, family_alias, "family", "", family, now)
+            controllers, observed_aliases = self._collect_topology_aliases(
+                db, entity_ids, aliases, family, family_alias, now
             )
-            controllers: list[str] = []
-            observed_aliases: list[str] = []
-            for entity_id in entity_ids:
-                alias = aliases.get(entity_id)
-                if not alias:
-                    continue
-                domain = entity_id.split(".", 1)[0] if "." in entity_id else "entity"
-                kind = "controller" if domain in _CONTROLLER_DOMAINS else "helper" if domain in _HELPER_DOMAINS else "entity"
-                db.execute(
-                    """INSERT INTO topology_nodes(alias, kind, domain, family, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(alias) DO UPDATE SET
-                        kind=excluded.kind, domain=excluded.domain, family=excluded.family, last_seen=excluded.last_seen""",
-                    (alias, kind, domain, family, now, now),
-                )
-                observed_aliases.append(alias)
-                if kind == "controller":
-                    controllers.append(alias)
-                self._upsert_edge(db, alias, family_alias, "observed_family", now)
-
-            if controllers:
-                for controller in controllers:
-                    for target in observed_aliases:
-                        if target != controller:
-                            self._upsert_edge(db, controller, target, "references_in_incident", now)
-            else:
-                # Evidence-only co-occurrence graph. Do not claim a config
-                # reference when no automation/script/scene was actually seen.
-                limited = observed_aliases[:12]
-                for index, source in enumerate(limited):
-                    for target in limited[index + 1 :]:
-                        self._upsert_edge(db, source, target, "co_occurs_in_incident", now)
+            self._link_topology_edges(db, controllers, observed_aliases, now)
             db.commit()
 
     @staticmethod
@@ -712,7 +765,6 @@ class IncidentStore:
                 except sqlite3.OperationalError:
                     pass
             elif query:
-                # Safe local fallback if this SQLite build lacks FTS5.
                 tokens = [part.strip('"') for part in query.split(" OR ")][:6]
                 for token in tokens:
                     rows = db.execute(
