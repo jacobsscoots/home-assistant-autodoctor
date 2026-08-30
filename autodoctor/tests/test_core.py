@@ -16,6 +16,7 @@ from autodoctor.llm import AnthropicProvider, OpenAIProvider
 from autodoctor.models import LogEvent
 from autodoctor.policy import can_auto_apply, is_immediate, looks_transient, should_ignore
 from autodoctor.redact import redact
+from autodoctor.store import IncidentStore
 
 
 def event(message: str, exception: str = "", name: str = "homeassistant.test") -> LogEvent:
@@ -53,7 +54,7 @@ def test_feedback_loop_filter_ignores_autodoctor_events() -> None:
     assert not should_ignore(event("Synthetic monitor-only pipeline verification event"))
 
 
-def test_context_pseudonymizes_entities_before_external_ai() -> None:
+def test_context_pseudonymizes_entities_with_stable_private_aliases(tmp_path: Path) -> None:
     class FakeHA:
         async def get_state(self, entity_id: str):
             assert entity_id == "device_tracker.private_phone"
@@ -66,18 +67,34 @@ def test_context_pseudonymizes_entities_before_external_ai() -> None:
                 },
             }
 
-    value = asyncio.run(
-        collect_context(
+    async def run() -> tuple[dict, dict]:
+        store = IncidentStore(str(tmp_path / "memory.db"))
+        await store.initialize()
+        first = await collect_context(
             event("device_tracker.private_phone became unavailable"),
             FakeHA(),
+            store,
+            "icloud3",
         )
-    )
+        second = await collect_context(
+            event("device_tracker.private_phone became unavailable"),
+            FakeHA(),
+            store,
+            "icloud3",
+        )
+        return first, second
+
+    value, second = asyncio.run(run())
     serialized = json.dumps(value)
 
     assert "device_tracker.private_phone" not in serialized
     assert "Private Phone Owner" not in serialized
-    assert "device_tracker.entity_1" in serialized
-    assert value["referenced_entities"]["device_tracker.entity_1"]["state"] == "home"
+    aliases = list(value["referenced_entities"])
+    assert len(aliases) == 1
+    alias = aliases[0]
+    assert alias.startswith("device_tracker.entity_")
+    assert second["referenced_entities"].keys() == value["referenced_entities"].keys()
+    assert value["referenced_entities"][alias]["state"] == "home"
 
 
 def test_v01_never_auto_applies() -> None:
