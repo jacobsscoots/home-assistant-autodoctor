@@ -1,32 +1,32 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .ha import HomeAssistantClient
 from .models import LogEvent
 from .redact import redact
 
+if TYPE_CHECKING:
+    from .store import IncidentStore
+
 _ENTITY_ID = re.compile(r"\b(?:automation|binary_sensor|button|calendar|camera|climate|counter|cover|device_tracker|event|fan|humidifier|input_boolean|input_button|input_datetime|input_number|input_select|input_text|light|lock|media_player|number|person|remote|scene|script|select|sensor|siren|switch|text|timer|update|vacuum|weather)\.[a-zA-Z0-9_]+\b")
 
 
-def _entity_aliases(entity_ids: list[str]) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    for index, entity_id in enumerate(entity_ids, start=1):
-        domain = entity_id.split(".", 1)[0]
-        aliases[entity_id] = f"{domain}.entity_{index}"
-    return aliases
-
-
 def _sanitize_text(text: str, aliases: dict[str, str]) -> str:
-    aliased = _ENTITY_ID.sub(lambda match: aliases.get(match.group(0), match.group(0)), text)
+    aliased = _ENTITY_ID.sub(lambda match: aliases.get(match.group(0), "<ENTITY>"), text)
     return redact(aliased)
 
 
-async def collect_context(event: LogEvent, ha: HomeAssistantClient) -> dict[str, Any]:
-    combined = f"{event.message}\n{event.exception}"
+async def collect_context(
+    event: LogEvent,
+    ha: HomeAssistantClient,
+    store: "IncidentStore",
+    family: str,
+) -> dict[str, Any]:
+    combined = f"{event.name}\n{event.source}\n{event.message}\n{event.exception}"
     entity_ids = list(dict.fromkeys(_ENTITY_ID.findall(combined)))[:20]
-    aliases = _entity_aliases(entity_ids)
+    aliases = await store.get_or_create_entity_aliases(entity_ids, event.timestamp)
     states: dict[str, Any] = {}
 
     for entity_id in entity_ids:
@@ -46,6 +46,8 @@ async def collect_context(event: LogEvent, ha: HomeAssistantClient) -> dict[str,
                 "last_changed": state.get("last_changed"),
                 "device_class": attrs.get("device_class"),
             }
+
+    await store.observe_topology(entity_ids, aliases, family, event.timestamp)
 
     return {
         "event": {

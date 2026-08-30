@@ -45,6 +45,24 @@ configuration:
   ai_output_cost_per_million_usd:
     name: Output price per million tokens (USD)
     description: Enter the current published output price for the exact configured model.
+  memory_enabled:
+    name: Enable local AutoDoctor memory
+    description: Retrieves bounded, privacy-safe historical knowledge and observed topology from the local SQLite database before AI diagnosis.
+  memory_max_items:
+    name: Memory items per AI diagnosis
+    description: Maximum number of ranked historical knowledge records inserted into one AI prompt.
+  memory_max_chars:
+    name: Memory character budget per AI diagnosis
+    description: Hard character cap for historical knowledge inserted into one AI prompt.
+  memory_ai_hypothesis_expiry_days:
+    name: AI hypothesis memory expiry
+    description: Days before an unverified AI diagnosis becomes stale and is excluded from retrieval unless replaced by newer evidence.
+  memory_quiet_outcome_seconds:
+    name: Quiet outcome window
+    description: If a diagnosed fingerprint does not recur for this long, memory records a cautious quiet outcome; this is not proof of a fix.
+  memory_worsened_recurrences:
+    name: Recurrences considered worsening
+    description: Number of post-diagnosis recurrences that promotes outcome feedback from continued to worsened-by-recurrence.
   mcp_enabled:
     name: Enable Home Assistant MCP enrichment
   mcp_url:
@@ -55,4 +73,4 @@ configuration:
     name: Notify on new incident
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.1.3 cannot apply changes.
+    description: Reserved for the validated executor. v0.1.5 still cannot apply changes.

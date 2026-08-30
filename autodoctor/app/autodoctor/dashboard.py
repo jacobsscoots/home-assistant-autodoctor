@@ -42,27 +42,28 @@ class Dashboard:
     async def index(self, request: web.Request) -> web.Response:
         incidents = await self.store.list_recent(50)
         health = await self.engine.health()
-        rows = "".join(self._row(item) for item in incidents) or '<tr><td colspan="7">No incidents captured yet.</td></tr>'
+        rows = "".join(self._row(item) for item in incidents) or '<tr><td colspan="8">No incidents captured yet.</td></tr>'
         mcp = health.get("mcp", {})
         mcp_text = "connected" if mcp.get("connected") else ("disabled" if not mcp.get("enabled") else "not connected")
         budget = health.get("ai_budget", {})
         scheduler = health.get("ai_scheduler", {})
+        memory = health.get("memory", {})
         budget_text = (
             f"${budget.get('spent_usd', 0):.4f} / ${budget.get('stop_threshold_usd', 0):.2f}"
             if budget.get("enabled")
             else "locked"
         )
-        remaining_text = (
-            f"${budget.get('remaining_to_stop_usd', 0):.4f}"
-            if budget.get("enabled")
-            else "locked"
-        )
+        remaining_text = f"${budget.get('remaining_to_stop_usd', 0):.4f}" if budget.get("enabled") else "locked"
         token_text = f"{int(budget.get('input_tokens', 0))} / {int(budget.get('output_tokens', 0))}"
         deferral_text = (
             f"{int(scheduler.get('backlog_deferred', 0))} / "
             f"{int(scheduler.get('family_deferred', 0))} / "
             f"{int(scheduler.get('hourly_deferred', 0))}"
         )
+        memory_text = f"{int(memory.get('knowledge_active', 0))} / {int(memory.get('knowledge_total', 0))}"
+        topology_text = f"{int(memory.get('topology_nodes', 0))} / {int(memory.get('topology_edges', 0))}"
+        alias_text = str(int(memory.get("stable_entity_aliases", 0)))
+        fts_text = "FTS5" if memory.get("fts5_available") else "fallback"
         body = f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="20"><title>AutoDoctor</title>
@@ -85,6 +86,12 @@ small{{color:#9ca3af}}
 <div><div class="k">AI budget remaining</div><div class="v">{html.escape(remaining_text)}</div></div>
 <div><div class="k">AI analyses</div><div class="v">{int(budget.get('analyses_count', 0))}</div></div>
 <div><div class="k">Tokens in / out</div><div class="v">{html.escape(token_text)}</div></div>
+<div><div class="k">Memory active / total</div><div class="v">{html.escape(memory_text)}</div></div>
+<div><div class="k">Last memory matches</div><div class="v">{int(memory.get('last_retrieval_matches', 0))}</div></div>
+<div><div class="k">Memory search</div><div class="v">{html.escape(fts_text)}</div></div>
+<div><div class="k">Stable aliases</div><div class="v">{html.escape(alias_text)}</div></div>
+<div><div class="k">Topology nodes / edges</div><div class="v">{html.escape(topology_text)}</div></div>
+<div><div class="k">Outcome events</div><div class="v">{int(memory.get('outcome_events', 0))}</div></div>
 <div><div class="k">Budget blocked</div><div class="v">{int(budget.get('budget_blocked_count', 0))}</div></div>
 <div><div class="k">Family cap / hour</div><div class="v">{int(scheduler.get('max_ai_analyses_per_family_per_hour', 0))}</div></div>
 <div><div class="k">Startup grace</div><div class="v">{int(scheduler.get('startup_grace_remaining_seconds', 0))}s</div></div>
@@ -92,8 +99,8 @@ small{{color:#9ca3af}}
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.1.3 can monitor and store AI diagnoses, but the repair executor remains hard-disabled. Startup backlog and per-family fairness protect AI capacity from noisy incident bursts.</div>
-<div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
+<div class="card"><strong>Safety:</strong> v0.1.5 uses bounded local history and observed topology to improve read-only diagnoses. Historical memory is evidence, not authority; the repair executor remains hard-disabled.</div>
+<div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Pattern</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")
 
@@ -114,6 +121,7 @@ small{{color:#9ca3af}}
             "<tr>"
             f"<td>{html.escape(ts)}</td>"
             f"<td>{int(item['occurrences'])}</td>"
+            f"<td><small>{html.escape(str(item.get('pattern_label') or ''))}</small></td>"
             f"<td>{html.escape(item['level'])}</td>"
             f"<td><small>{html.escape(item['name'])}</small></td>"
             f"<td>{html.escape(item['message'][:350])}</td>"

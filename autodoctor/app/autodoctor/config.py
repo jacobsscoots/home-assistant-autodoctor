@@ -23,6 +23,12 @@ class Settings:
     ai_monthly_stop_usd: float = 0.0
     ai_input_cost_per_million_usd: float = 0.0
     ai_output_cost_per_million_usd: float = 0.0
+    memory_enabled: bool = True
+    memory_max_items: int = 5
+    memory_max_chars: int = 6000
+    memory_ai_hypothesis_expiry_days: int = 30
+    memory_quiet_outcome_seconds: int = 86400
+    memory_worsened_recurrences: int = 10
     mcp_enabled: bool = False
     mcp_url: str = ""
     mcp_token: str = ""

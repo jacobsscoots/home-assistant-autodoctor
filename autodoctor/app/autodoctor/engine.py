@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from . import AUTODOCTOR_VERSION
 from .budget import estimate_cost_usd, reservation_for_prompt
 from .config import Settings
 from .context import collect_context
@@ -13,6 +14,7 @@ from .fingerprint import fingerprint
 from .ha import HomeAssistantClient
 from .llm import BaseProvider, NoProvider
 from .mcp_backend import MCPBackend
+from .memory import pattern_signature
 from .models import LogEvent
 from .policy import is_immediate, looks_transient, should_ignore
 from .scheduler import incident_family
@@ -20,6 +22,13 @@ from .store import IncidentStore
 
 _LOG = logging.getLogger(__name__)
 _ENTITY_ID = re.compile(r"\b[a-z_]+\.[a-zA-Z0-9_]+\b")
+
+_MEMORY_GUIDANCE = (
+    "Local memory is historical evidence, not current fact. Prefer verified_fix/manually_verified "
+    "over ai_hypothesis/observed. Treat expired, superseded, failed or recurring outcomes as warnings. "
+    "A quiet outcome means only that no recurrence was observed in the configured window; it is not proof "
+    "of a fix. Topology edges are observed relationships from incident evidence, not a complete HA config graph."
+)
 
 
 class AutoDoctorEngine:
@@ -42,6 +51,9 @@ class AutoDoctorEngine:
         self.backlog_deferred = 0
         self.family_deferred = 0
         self.hourly_deferred = 0
+        self.last_memory_matches = 0
+        self._ha_version = "unknown"
+        self._ha_version_checked = False
 
     async def run_forever(self) -> None:
         async for event in self.ha.system_log_events():
@@ -49,6 +61,17 @@ class AutoDoctorEngine:
                 await self.handle_event(event)
             except Exception:
                 _LOG.exception("Failed to process system log event")
+
+    async def _system_version(self) -> str:
+        if self._ha_version_checked:
+            return self._ha_version
+        self._ha_version_checked = True
+        try:
+            self._ha_version = await self.ha.get_version()
+        except Exception as exc:
+            _LOG.warning("Could not read HA Core version for memory freshness: %s", exc)
+            self._ha_version = "unknown"
+        return self._ha_version
 
     async def handle_event(self, event: LogEvent) -> None:
         if should_ignore(event):
@@ -58,8 +81,27 @@ class AutoDoctorEngine:
         self.processed_events += 1
         fp = fingerprint(event)
         family = incident_family(event.name, event.source)
-        row, is_new = await self.store.record(fp, event)
-        _LOG.info("Incident %s occurrence=%s %s: %s", fp, row["occurrences"], event.name, event.message[:180])
+        pattern_key, pattern_label = pattern_signature(event, family)
+        row, is_new = await self.store.record(fp, event, pattern_key, pattern_label)
+        _LOG.info(
+            "Incident %s pattern=%s occurrence=%s %s: %s",
+            fp,
+            pattern_key,
+            row["occurrences"],
+            event.name,
+            event.message[:180],
+        )
+
+        if self.settings.memory_enabled and not is_new:
+            try:
+                await self.store.record_recurrence_outcome(
+                    fp,
+                    int(row["occurrences"]),
+                    worsened_recurrences=self.settings.memory_worsened_recurrences,
+                    now_ts=event.timestamp,
+                )
+            except Exception:
+                _LOG.exception("Could not record memory outcome feedback for %s", fp)
 
         if is_new and self.settings.notify_on_new_incident:
             await self.ha.notify(
@@ -73,7 +115,63 @@ class AutoDoctorEngine:
         if not await self._should_analyze(event, row, family):
             return
 
-        context = await collect_context(event, self.ha)
+        context = await collect_context(event, self.ha, self.store, family)
+        context["incident"] = {
+            "fingerprint": fp,
+            "pattern_key": pattern_key,
+            "pattern_label": pattern_label,
+            "family": family,
+            "occurrences": row["occurrences"],
+            "first_seen": row["first_seen"],
+            "last_seen": row["last_seen"],
+            "looks_transient": looks_transient(event),
+        }
+        context["versions"] = {
+            "home_assistant": await self._system_version(),
+            "autodoctor": AUTODOCTOR_VERSION,
+        }
+
+        if self.settings.memory_enabled:
+            try:
+                await self.store.refresh_quiet_outcomes(self.settings.memory_quiet_outcome_seconds)
+                event_context = context["event"]
+                memory = await self.store.retrieve_memory(
+                    query_text=" ".join(
+                        str(event_context.get(key) or "")
+                        for key in ("name", "source", "message", "exception")
+                    ),
+                    family=family,
+                    pattern_key=pattern_key,
+                    pattern_label=pattern_label,
+                    aliases=list(context["referenced_entities"].keys()),
+                    limit=self.settings.memory_max_items,
+                    max_chars=self.settings.memory_max_chars,
+                )
+                self.last_memory_matches = int(memory["matches"])
+                context["local_memory"] = {
+                    "guidance": _MEMORY_GUIDANCE,
+                    "knowledge": memory["knowledge"],
+                    "topology": memory["topology"],
+                    "retrieval": {
+                        "matches": memory["matches"],
+                        "fts5_available": memory["fts_available"],
+                        "max_items": self.settings.memory_max_items,
+                        "max_chars": self.settings.memory_max_chars,
+                    },
+                }
+                _LOG.info(
+                    "Memory retrieval %s pattern=%s family=%s matches=%d topology_edges=%d fts5=%s",
+                    fp,
+                    pattern_key,
+                    family,
+                    int(memory["matches"]),
+                    len(memory["topology"]),
+                    bool(memory["fts_available"]),
+                )
+            except Exception:
+                self.last_memory_matches = 0
+                _LOG.exception("Local memory retrieval failed for %s; continuing without RAG", fp)
+
         entity_ids = list(dict.fromkeys(_ENTITY_ID.findall(event.message + "\n" + event.exception)))
         try:
             mcp_context = await self.mcp.get_relevant_config(entity_ids)
@@ -81,16 +179,10 @@ class AutoDoctorEngine:
             _LOG.warning("MCP enrichment failed for %s: %s", fp, exc)
             mcp_context = {"error": str(exc)}
         context["mcp_relevant_config"] = mcp_context
-        context["incident"] = {
-            "fingerprint": fp,
-            "occurrences": row["occurrences"],
-            "first_seen": row["first_seen"],
-            "last_seen": row["last_seen"],
-            "looks_transient": looks_transient(event),
-        }
 
         prompt = (
             "Investigate this Home Assistant incident. Do not assume missing context. "
+            "Use local_memory only as explicitly weighted historical evidence; do not copy an old fix blindly. "
             "If a concrete patch cannot be justified, propose checks rather than guessing.\n\n"
             + json.dumps(context, ensure_ascii=False, indent=2)
         )
@@ -110,9 +202,6 @@ class AutoDoctorEngine:
             reserved_cost_usd=reservation.cost_usd,
             monthly_stop_usd=self.settings.ai_monthly_stop_usd,
         )
-        # Cooldown applies to every AI attempt, including provider failures and
-        # local budget blocks. This prevents a repeating HA error from creating
-        # a tight retry loop or a flood of budget-block records.
         await self.store.mark_analysis_attempt(fp)
         if usage_id is None:
             _LOG.warning(
@@ -137,12 +226,7 @@ class AutoDoctorEngine:
             reservation.output_tokens,
             reservation.cost_usd,
             spent_before,
-            max(
-                0.0,
-                self.settings.ai_monthly_stop_usd
-                - spent_before
-                - reservation.cost_usd,
-            ),
+            max(0.0, self.settings.ai_monthly_stop_usd - spent_before - reservation.cost_usd),
         )
 
         try:
@@ -160,16 +244,8 @@ class AutoDoctorEngine:
                 )
                 return
 
-            input_tokens = (
-                result.input_tokens
-                if result.input_tokens is not None
-                else reservation.input_tokens
-            )
-            output_tokens = (
-                result.output_tokens
-                if result.output_tokens is not None
-                else reservation.output_tokens
-            )
+            input_tokens = result.input_tokens if result.input_tokens is not None else reservation.input_tokens
+            output_tokens = result.output_tokens if result.output_tokens is not None else reservation.output_tokens
             input_source = "provider" if result.input_tokens is not None else "reservation"
             output_source = "provider" if result.output_tokens is not None else "reservation"
             actual_cost = estimate_cost_usd(
@@ -187,6 +263,22 @@ class AutoDoctorEngine:
 
             analysis = result.analysis
             await self.store.save_analysis(fp, analysis)
+            if self.settings.memory_enabled:
+                try:
+                    await self.store.save_ai_memory(
+                        fingerprint=fp,
+                        family=family,
+                        pattern_key=pattern_key,
+                        pattern_label=pattern_label,
+                        analysis=analysis,
+                        occurrences=int(row["occurrences"]),
+                        ha_version=self._ha_version,
+                        autodoctor_version=AUTODOCTOR_VERSION,
+                        expiry_days=self.settings.memory_ai_hypothesis_expiry_days,
+                    )
+                except Exception:
+                    _LOG.exception("Could not persist AI hypothesis memory for %s", fp)
+
             usage = await self.store.monthly_ai_usage()
             _LOG.info(
                 "AI usage %s family=%s input_tokens=%d input_source=%s output_tokens=%d output_source=%s "
@@ -236,10 +328,6 @@ class AutoDoctorEngine:
         if not is_immediate(event) and int(row["occurrences"]) < self.settings.min_occurrences_for_ai:
             return False
 
-        # Startup backlog guard: during the grace window, old incidents remain
-        # recorded/deduplicated but cannot immediately consume AI capacity.
-        # Incidents first seen after this process started are still eligible, so
-        # genuinely fresh failures are prioritized during startup.
         grace = max(0, int(self.settings.ai_startup_backlog_grace_seconds))
         first_seen = float(row.get("first_seen") or 0)
         if grace and first_seen < self.started_at and now - self.started_at < grace:
@@ -269,6 +357,7 @@ class AutoDoctorEngine:
         incidents = await self.store.list_recent(1000)
         mcp = await self.mcp.health()
         usage = await self.store.monthly_ai_usage()
+        memory = await self.store.memory_health()
         now = datetime.now(tz=timezone.utc).timestamp()
         family_counts = await self.store.ai_family_counts_since(now - 3600)
         stop = max(0.0, float(self.settings.ai_monthly_stop_usd))
@@ -297,14 +386,25 @@ class AutoDoctorEngine:
                 int(self.settings.ai_startup_backlog_grace_seconds - (now - self.started_at)),
             ),
             "max_ai_analyses_per_hour": int(self.settings.max_ai_analyses_per_hour),
-            "max_ai_analyses_per_family_per_hour": int(
-                self.settings.max_ai_analyses_per_family_per_hour
-            ),
+            "max_ai_analyses_per_family_per_hour": int(self.settings.max_ai_analyses_per_family_per_hour),
             "backlog_deferred": self.backlog_deferred,
             "family_deferred": self.family_deferred,
             "hourly_deferred": self.hourly_deferred,
             "family_attempts_last_hour": family_counts,
         }
+        memory.update(
+            {
+                "enabled": bool(self.settings.memory_enabled),
+                "max_items_per_prompt": int(self.settings.memory_max_items),
+                "max_chars_per_prompt": int(self.settings.memory_max_chars),
+                "last_retrieval_matches": int(self.last_memory_matches),
+                "ai_hypothesis_expiry_days": int(self.settings.memory_ai_hypothesis_expiry_days),
+                "quiet_outcome_seconds": int(self.settings.memory_quiet_outcome_seconds),
+                "worsened_recurrences": int(self.settings.memory_worsened_recurrences),
+                "home_assistant_version": self._ha_version,
+                "autodoctor_version": AUTODOCTOR_VERSION,
+            }
+        )
         return {
             "status": "ok",
             "processed_events": self.processed_events,
@@ -313,6 +413,7 @@ class AutoDoctorEngine:
             "ai_model": self.settings.ai_model,
             "ai_budget": budget,
             "ai_scheduler": scheduler,
+            "memory": memory,
             "mcp": mcp,
             "auto_apply_low_risk_configured": self.settings.auto_apply_low_risk,
             "auto_apply_executor_enabled": False,

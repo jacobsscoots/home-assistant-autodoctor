@@ -69,6 +69,13 @@ class HomeAssistantClient:
             response.raise_for_status()
             return await response.json()
 
+    async def get_version(self) -> str:
+        """Return the live HA Core version without reading configuration files."""
+        async with self.session.get(f"{self.api_base}/config") as response:
+            response.raise_for_status()
+            data = await response.json()
+        return str(data.get("version") or "unknown")
+
     async def notify(self, title: str, message: str, notification_id: str) -> None:
         payload = {"title": title, "message": message, "notification_id": notification_id}
         async with self.session.post(
