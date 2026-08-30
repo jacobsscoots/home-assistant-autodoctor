@@ -1,7 +1,7 @@
 ---
 name: Home Assistant incident history
-a bout: Record a Home Assistant incident, diagnosis, fix and verification
- title: "HA incident: "
+about: Record a Home Assistant incident, diagnosis, fix and verification
+title: "HA incident: "
 labels: ""
 assignees: ""
 ---
