@@ -52,16 +52,23 @@ _ENTITY_DOMAINS = frozenset(
 )
 
 
+def _is_supported_entity(candidate: str) -> bool:
+    return candidate.partition(".")[0] in _ENTITY_DOMAINS
+
+
 def _entity_ids(text: str) -> list[str]:
-    return [
-        candidate
-        for candidate in _ENTITY_CANDIDATE.findall(text)
-        if candidate.partition(".")[0] in _ENTITY_DOMAINS
-    ]
+    return [candidate for candidate in _ENTITY_CANDIDATE.findall(text) if _is_supported_entity(candidate)]
+
+
+def _alias_match(match: re.Match[str], aliases: dict[str, str]) -> str:
+    candidate = match.group(0)
+    if not _is_supported_entity(candidate):
+        return candidate
+    return aliases.get(candidate, "<ENTITY>")
 
 
 def _sanitize_text(text: str, aliases: dict[str, str]) -> str:
-    aliased = _ENTITY_CANDIDATE.sub(lambda match: aliases.get(match.group(0), match.group(0)), text)
+    aliased = _ENTITY_CANDIDATE.sub(lambda match: _alias_match(match, aliases), text)
     return redact(aliased)
 
 
