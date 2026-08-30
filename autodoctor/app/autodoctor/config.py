@@ -11,6 +11,8 @@ class Settings:
     min_occurrences_for_ai: int = 2
     analysis_cooldown_seconds: int = 900
     max_ai_analyses_per_hour: int = 12
+    max_ai_analyses_per_family_per_hour: int = 2
+    ai_startup_backlog_grace_seconds: int = 300
     ai_provider: str = "none"
     ai_model: str = ""
     ai_effort: str = "low"
