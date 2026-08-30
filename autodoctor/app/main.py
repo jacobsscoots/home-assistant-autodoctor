@@ -9,7 +9,7 @@ from autodoctor.engine import AutoDoctorEngine
 from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
 from autodoctor.mcp_backend import MCPBackend
-from autodoctor.store import IncidentStore
+from autodoctor.seed_store import SeedAwareIncidentStore
 
 
 async def async_main() -> None:
@@ -19,7 +19,10 @@ async def async_main() -> None:
         format="%(asctime)s %(levelname)s [autodoctor] %(message)s",
     )
 
-    store = IncidentStore("/data/autodoctor.db")
+    store = SeedAwareIncidentStore(
+        "/data/autodoctor.db",
+        seed_enabled=settings.memory_seed_enabled,
+    )
     ha = HomeAssistantClient()
     llm = build_provider(settings)
     mcp = MCPBackend(settings)
