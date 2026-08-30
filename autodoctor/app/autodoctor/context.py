@@ -10,11 +10,58 @@ from .redact import redact
 if TYPE_CHECKING:
     from .store import IncidentStore
 
-_ENTITY_ID = re.compile(r"\b(?:automation|binary_sensor|button|calendar|camera|climate|counter|cover|device_tracker|event|fan|humidifier|input_boolean|input_button|input_datetime|input_number|input_select|input_text|light|lock|media_player|number|person|remote|scene|script|select|sensor|siren|switch|text|timer|update|vacuum|weather)\.[a-zA-Z0-9_]+\b")
+_ENTITY_CANDIDATE = re.compile(r"\b[a-z_]+\.\w+\b")
+_ENTITY_DOMAINS = frozenset(
+    {
+        "automation",
+        "binary_sensor",
+        "button",
+        "calendar",
+        "camera",
+        "climate",
+        "counter",
+        "cover",
+        "device_tracker",
+        "event",
+        "fan",
+        "humidifier",
+        "input_boolean",
+        "input_button",
+        "input_datetime",
+        "input_number",
+        "input_select",
+        "input_text",
+        "light",
+        "lock",
+        "media_player",
+        "number",
+        "person",
+        "remote",
+        "scene",
+        "script",
+        "select",
+        "sensor",
+        "siren",
+        "switch",
+        "text",
+        "timer",
+        "update",
+        "vacuum",
+        "weather",
+    }
+)
+
+
+def _entity_ids(text: str) -> list[str]:
+    return [
+        candidate
+        for candidate in _ENTITY_CANDIDATE.findall(text)
+        if candidate.partition(".")[0] in _ENTITY_DOMAINS
+    ]
 
 
 def _sanitize_text(text: str, aliases: dict[str, str]) -> str:
-    aliased = _ENTITY_ID.sub(lambda match: aliases.get(match.group(0), "<ENTITY>"), text)
+    aliased = _ENTITY_CANDIDATE.sub(lambda match: aliases.get(match.group(0), match.group(0)), text)
     return redact(aliased)
 
 
@@ -25,7 +72,7 @@ async def collect_context(
     family: str,
 ) -> dict[str, Any]:
     combined = f"{event.name}\n{event.source}\n{event.message}\n{event.exception}"
-    entity_ids = list(dict.fromkeys(_ENTITY_ID.findall(combined)))[:20]
+    entity_ids = list(dict.fromkeys(_entity_ids(combined)))[:20]
     aliases = await store.get_or_create_entity_aliases(entity_ids, event.timestamp)
     states: dict[str, Any] = {}
 
