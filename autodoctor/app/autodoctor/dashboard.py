@@ -12,7 +12,8 @@ from .engine import AutoDoctorEngine
 from .store import IncidentStore
 
 
-_INGRESS_PROXY_IP = "172.30.32.2"
+# Home Assistant's ingress contract documents this fixed Supervisor proxy source address.
+_INGRESS_PROXY_IP = "172.30.32.2"  # NOSONAR - fixed HA ingress proxy, not a configurable remote endpoint
 
 
 def ingress_remote_allowed(remote: str | None) -> bool:
