@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.4.4"
+version: "0.4.5"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
