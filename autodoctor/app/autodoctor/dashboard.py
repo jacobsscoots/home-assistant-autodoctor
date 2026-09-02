@@ -81,7 +81,8 @@ class Dashboard:
         deferral_text = (
             f"{int(scheduler.get('backlog_deferred', 0))} / "
             f"{int(scheduler.get('family_deferred', 0))} / "
-            f"{int(scheduler.get('hourly_deferred', 0))}"
+            f"{int(scheduler.get('hourly_deferred', 0))} / "
+            f"{int(scheduler.get('pattern_deferred', 0))}"
         )
         memory_text = f"{int(memory.get('knowledge_active', 0))} / {int(memory.get('knowledge_total', 0))}"
         topology_text = f"{int(memory.get('topology_nodes', 0))} / {int(memory.get('topology_edges', 0))}"
@@ -118,11 +119,11 @@ small{{color:#9ca3af}}
 <div><div class="k">Budget blocked</div><div class="v">{int(budget.get('budget_blocked_count', 0))}</div></div>
 <div><div class="k">Family cap / hour</div><div class="v">{int(scheduler.get('max_ai_analyses_per_family_per_hour', 0))}</div></div>
 <div><div class="k">Startup grace</div><div class="v">{int(scheduler.get('startup_grace_remaining_seconds', 0))}s</div></div>
-<div><div class="k">Deferrals B / F / H</div><div class="v">{html.escape(deferral_text)}</div></div>
+<div><div class="k">Deferrals B / F / H / P</div><div class="v">{html.escape(deferral_text)}</div></div>
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.1.6 uses bounded local history and observed topology to improve read-only diagnoses. Historical memory is evidence, not authority; the repair executor remains hard-disabled.</div>
+<div class="card"><strong>Safety:</strong> v0.1.7 stabilizes volatile incident fingerprints and adds pattern-level AI cooldown while keeping bounded local history, observed topology and read-only diagnoses. The repair executor remains hard-disabled.</div>
 <div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Pattern</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")

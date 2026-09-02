@@ -9,8 +9,8 @@ configuration:
     name: Maximum retained incidents
     description: Caps distinct incident fingerprints retained in the local database; the oldest are removed first.
   analysis_cooldown_seconds:
-    name: Per-incident AI attempt cooldown
-    description: Minimum seconds before the same incident fingerprint can make another AI attempt, including failures or budget blocks.
+    name: Incident and pattern AI attempt cooldown
+    description: Minimum seconds before the same exact incident or broader failure pattern can make another AI attempt, including failures or budget blocks.
   max_ai_analyses_per_hour:
     name: AI attempts per hour
     description: Global provider-attempt protection. Budget-blocked reservations are tracked separately and do not consume this hourly allowance.
@@ -79,4 +79,4 @@ configuration:
     name: Notify on new incident
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.1.6 still cannot apply changes.
+    description: Reserved for the validated executor. v0.1.7 still cannot apply changes.

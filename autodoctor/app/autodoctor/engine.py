@@ -49,9 +49,12 @@ class AutoDoctorEngine:
         self.backlog_deferred = 0
         self.family_deferred = 0
         self.hourly_deferred = 0
+        self.pattern_deferred = 0
         self.last_memory_matches = 0
         self._ha_version = "unknown"
         self._ha_version_checked = False
+        self._pattern_analysis_loaded = False
+        self._pattern_last_analysis_at: dict[str, float] = {}
 
     async def run_forever(self) -> None:
         async for event in self.ha.system_log_events():
@@ -75,6 +78,39 @@ class AutoDoctorEngine:
         if should_ignore(event):
             return False
         return not (self.settings.min_level == "ERROR" and event.level != "ERROR")
+
+    async def _load_pattern_analysis_cache(self) -> None:
+        if self._pattern_analysis_loaded:
+            return
+        rows = await self.store.list_recent(self.settings.max_incidents_retained)
+        for row in rows:
+            pattern_key = str(row.get("pattern_key") or "")
+            last_analysis_at = row.get("last_analysis_at")
+            if not pattern_key or not last_analysis_at:
+                continue
+            timestamp = float(last_analysis_at)
+            previous = self._pattern_last_analysis_at.get(pattern_key, 0.0)
+            if timestamp > previous:
+                self._pattern_last_analysis_at[pattern_key] = timestamp
+        self._pattern_analysis_loaded = True
+
+    async def _pattern_in_cooldown(self, row: dict[str, Any], now: float) -> bool:
+        pattern_key = str(row.get("pattern_key") or "")
+        if not pattern_key:
+            return False
+        await self._load_pattern_analysis_cache()
+        last_analysis_at = self._pattern_last_analysis_at.get(pattern_key)
+        if (
+            last_analysis_at
+            and now - last_analysis_at < self.settings.analysis_cooldown_seconds
+        ):
+            self.pattern_deferred += 1
+            return True
+        return False
+
+    def _mark_pattern_analysis_attempt(self, pattern_key: str, timestamp: float) -> None:
+        if pattern_key:
+            self._pattern_last_analysis_at[pattern_key] = float(timestamp)
 
     async def _record_incident(
         self,
@@ -264,6 +300,7 @@ class AutoDoctorEngine:
         prompt: str,
         fp: str,
         family: str,
+        pattern_key: str,
     ) -> tuple[int, BudgetReservation] | None:
         reservation = reservation_for_prompt(
             self.llm.reservation_input_text(prompt),
@@ -280,7 +317,9 @@ class AutoDoctorEngine:
             reserved_cost_usd=reservation.cost_usd,
             monthly_stop_usd=self.settings.ai_monthly_stop_usd,
         )
-        await self.store.mark_analysis_attempt(fp)
+        attempted_at = datetime.now(tz=timezone.utc).timestamp()
+        await self.store.mark_analysis_attempt(fp, attempted_at)
+        self._mark_pattern_analysis_attempt(pattern_key, attempted_at)
         if usage_id is None:
             self._log_budget_block(fp, family, spent_before, reservation)
             return None
@@ -485,7 +524,7 @@ class AutoDoctorEngine:
             pattern_label=pattern_label,
             row=row,
         )
-        reservation = await self._reserve_analysis(prompt, fp, family)
+        reservation = await self._reserve_analysis(prompt, fp, family, pattern_key)
         if reservation is None:
             return
         usage_id, budget_reservation = reservation
@@ -503,6 +542,8 @@ class AutoDoctorEngine:
     async def _should_analyze(self, event: LogEvent, row: dict[str, Any], family: str) -> bool:
         now = datetime.now(tz=timezone.utc).timestamp()
         if row.get("last_analysis_at") and now - float(row["last_analysis_at"]) < self.settings.analysis_cooldown_seconds:
+            return False
+        if await self._pattern_in_cooldown(row, now):
             return False
         if not is_immediate(event) and int(row["occurrences"]) < self.settings.min_occurrences_for_ai:
             return False
@@ -569,6 +610,7 @@ class AutoDoctorEngine:
             "backlog_deferred": self.backlog_deferred,
             "family_deferred": self.family_deferred,
             "hourly_deferred": self.hourly_deferred,
+            "pattern_deferred": self.pattern_deferred,
             "family_attempts_last_hour": family_counts,
         }
         memory.update(
