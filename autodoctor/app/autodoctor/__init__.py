@@ -1,3 +1,3 @@
 """AutoDoctor Home Assistant app."""
 
-AUTODOCTOR_VERSION = "0.1.6"
+AUTODOCTOR_VERSION = "0.1.7"
