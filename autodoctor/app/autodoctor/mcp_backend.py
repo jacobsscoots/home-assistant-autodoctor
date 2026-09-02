@@ -17,7 +17,7 @@ from .redact import redact
 _LOG = logging.getLogger(__name__)
 
 # Explicitly allow only diagnostic reads. Anything not listed here is denied before a
-# network call is made, even if the upstream MCP server exposes it.
+# network tool call is made, even if the upstream MCP server exposes it.
 READ_ONLY_TOOLS = frozenset(
     {
         "get_state",
@@ -54,9 +54,10 @@ READ_ONLY_TOOLS = frozenset(
     }
 )
 
-# v0.2.0 intentionally keeps automatic enrichment tiny. More targeted read-only
-# enrichment can be added later without widening the model's authority.
-_AUTO_CONTEXT_TOOLS = ("get_config", "get_system_status", "list_integrations")
+# v0.2.0 automatic enrichment is deliberately much smaller than the read allowlist.
+# get_config stays available for future deterministic local use but is not automatically
+# sent to AI context because upstream implementations may include HA location metadata.
+_AUTO_CONTEXT_TOOLS = ("get_system_status", "list_integrations")
 _REFRESH_SECONDS = 300
 _MAX_TOOL_PAYLOAD_CHARS = 6000
 _MAX_STRING_CHARS = 1000
@@ -64,7 +65,10 @@ _MAX_LIST_ITEMS = 30
 _MAX_DICT_ITEMS = 80
 _MAX_DEPTH = 5
 _ENTITY = re.compile(r"\b[a-z_]+\.\w+\b")
-_SENSITIVE_KEY = re.compile(r"(?i)(?:api[_-]?key|token|secret|password|authorization|credential)")
+_SENSITIVE_KEY = re.compile(
+    r"(?i)(?:api[_-]?key|token|secret|password|authorization|credential|"
+    r"latitude|longitude|location(?:_name)?)"
+)
 
 
 class MCPBackend:
@@ -137,6 +141,17 @@ class MCPBackend:
         }
         self._audit_logger.info(json.dumps(payload, separators=(",", ":")))
 
+    def _audit_local_failure(self, tool: str, purpose: str, error: str) -> None:
+        self._audit(
+            correlation_id=uuid4().hex,
+            tool=tool,
+            allowed=tool in READ_ONLY_TOOLS,
+            purpose=purpose,
+            duration_ms=0.0,
+            success=False,
+            error=error,
+        )
+
     @staticmethod
     def _validate_url(url: str) -> str:
         parsed = urlparse(url)
@@ -174,17 +189,16 @@ class MCPBackend:
             return value
         if isinstance(value, str):
             return cls._sanitize_string(value)
-        if isinstance(value, list):
-            return [cls._sanitize_value(item, depth + 1) for item in value[:_MAX_LIST_ITEMS]]
-        if isinstance(value, tuple):
+        if isinstance(value, (list, tuple)):
             return [cls._sanitize_value(item, depth + 1) for item in value[:_MAX_LIST_ITEMS]]
         if isinstance(value, dict):
             result: dict[str, Any] = {}
             for index, (raw_key, raw_value) in enumerate(value.items()):
                 if index >= _MAX_DICT_ITEMS:
                     break
-                key = cls._sanitize_string(str(raw_key))
-                if _SENSITIVE_KEY.search(str(raw_key)):
+                key_text = str(raw_key)
+                key = cls._sanitize_string(key_text)
+                if _SENSITIVE_KEY.search(key_text):
                     result[key] = "<REDACTED>"
                 else:
                     result[key] = cls._sanitize_value(raw_value, depth + 1)
@@ -197,10 +211,7 @@ class MCPBackend:
         serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
         if len(serialized) <= _MAX_TOOL_PAYLOAD_CHARS:
             return safe
-        return {
-            "truncated": True,
-            "preview": serialized[:_MAX_TOOL_PAYLOAD_CHARS],
-        }
+        return {"truncated": True, "preview": serialized[:_MAX_TOOL_PAYLOAD_CHARS]}
 
     @staticmethod
     def _decode_tool_result(result: Any) -> Any:
@@ -218,9 +229,7 @@ class MCPBackend:
                 blocks.append(json.loads(text))
             except (TypeError, json.JSONDecodeError):
                 blocks.append(str(text))
-        if len(blocks) == 1:
-            return blocks[0]
-        return blocks
+        return blocks[0] if len(blocks) == 1 else blocks
 
     async def _call_with_client(
         self,
@@ -257,8 +266,7 @@ class MCPBackend:
             raise RuntimeError(f"Configured MCP server does not expose allowlisted tool: {tool}")
         try:
             result = await client.call_tool(tool, arguments or {})
-            decoded = self._decode_tool_result(result)
-            safe = self._bound_payload(decoded)
+            safe = self._bound_payload(self._decode_tool_result(result))
             duration = (time.monotonic() - started) * 1000.0
             self._audit(
                 correlation_id=correlation_id,
@@ -291,33 +299,25 @@ class MCPBackend:
     ) -> Any:
         """Invoke one explicitly allowlisted read tool and return only sanitized output."""
         if tool not in READ_ONLY_TOOLS:
-            correlation_id = uuid4().hex
-            self._audit(
-                correlation_id=correlation_id,
-                tool=tool,
-                allowed=False,
-                purpose=purpose,
-                duration_ms=0.0,
-                success=False,
-                error="tool denied by read-only allowlist",
-            )
+            self._audit_local_failure(tool, purpose, "tool denied by read-only allowlist")
             raise PermissionError(f"MCP tool is not allowed in read-only mode: {tool}")
         if not self.enabled:
+            self._audit_local_failure(tool, purpose, "MCP is disabled")
             raise RuntimeError("MCP is disabled")
         if not self.url or not self.token:
+            self._audit_local_failure(tool, purpose, "mcp_url/mcp_token missing")
             raise RuntimeError("mcp_url/mcp_token missing")
-        http_client, client = self._session()
+        try:
+            http_client, client = self._session()
+        except Exception as exc:
+            self._audit_local_failure(tool, purpose, str(exc))
+            raise
         async with http_client:
             async with client:
                 tools = await client.list_tools()
                 self._server_tools = {str(item.name) for item in tools.tools}
                 self._connected = True
-                return await self._call_with_client(
-                    client,
-                    tool,
-                    arguments,
-                    purpose=purpose,
-                )
+                return await self._call_with_client(client, tool, arguments, purpose=purpose)
 
     async def _refresh_once(self) -> None:
         if not self.enabled:
@@ -343,8 +343,8 @@ class MCPBackend:
                         )
                     except Exception as exc:
                         _LOG.warning("Read-only MCP enrichment %s failed: %s", tool, redact(str(exc)))
-                if refreshed:
-                    self._context_cache = refreshed
+                # An empty successful refresh must clear stale context from a previous server/tool set.
+                self._context_cache = refreshed
                 self._last_refresh_at = time.time()
                 self._last_error = ""
 
@@ -372,8 +372,7 @@ class MCPBackend:
         await self.refresh_context()
         if self._refresh_task is None:
             self._refresh_task = asyncio.create_task(
-                self._refresh_loop(),
-                name="autodoctor-readonly-mcp-refresh",
+                self._refresh_loop(), name="autodoctor-readonly-mcp-refresh"
             )
 
     async def close(self) -> None:
@@ -395,7 +394,6 @@ class MCPBackend:
                 "mode": "read-only",
                 "auto_context_tools": list(_AUTO_CONTEXT_TOOLS),
             }
-        allowed_available = sorted(self._server_tools & READ_ONLY_TOOLS)
         blocked_exposed = sorted(self._server_tools - READ_ONLY_TOOLS)
         return {
             "enabled": True,
@@ -404,7 +402,7 @@ class MCPBackend:
             "last_refresh_at": self._last_refresh_at or None,
             "last_refresh_attempt_at": self._last_refresh_attempt_at or None,
             "cached_context_tools": sorted(self._context_cache),
-            "allowlisted_tools_available": allowed_available,
+            "allowlisted_tools_available": sorted(self._server_tools & READ_ONLY_TOOLS),
             "blocked_server_tools_count": len(blocked_exposed),
             "blocked_server_tools_sample": blocked_exposed[:12],
             "auto_context_tools": list(_AUTO_CONTEXT_TOOLS),
