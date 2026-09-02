@@ -10,6 +10,7 @@ from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
 from autodoctor.mcp_backend import MCPBackend
 from autodoctor.seed_store import SeedAwareIncidentStore
+from autodoctor.transport_logging import suppress_sensitive_http_transport_logs
 
 
 async def async_main() -> None:
@@ -18,6 +19,7 @@ async def async_main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [autodoctor] %(message)s",
     )
+    suppress_sensitive_http_transport_logs()
 
     store = SeedAwareIncidentStore(
         "/data/autodoctor.db",
