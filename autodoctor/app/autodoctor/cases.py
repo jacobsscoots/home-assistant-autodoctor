@@ -67,7 +67,7 @@ _ACTIVE_STATUSES = {
     "reopened",
 }
 
-_CASE_BY_PATTERN_SQL = _CASE_BY_PATTERN_SQL
+_CASE_BY_PATTERN_SQL = "SELECT * FROM incident_cases WHERE pattern_key = ?"
 
 
 class IncidentCaseManager:

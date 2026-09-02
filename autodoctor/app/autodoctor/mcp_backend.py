@@ -16,7 +16,7 @@ from .redact import redact
 
 _LOG = logging.getLogger(__name__)
 
-_MISSING_AUTH_ERROR = _MISSING_AUTH_ERROR
+_MISSING_AUTH_ERROR = "MCP URL/authentication missing"
 
 _LEGACY_READ_ONLY_TOOLS = frozenset(
     {
