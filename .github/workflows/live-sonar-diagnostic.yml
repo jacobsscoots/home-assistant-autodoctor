@@ -1,0 +1,35 @@
+name: Live Sonar Diagnostic
+
+on:
+  push:
+    branches:
+      - diagnostic/live-sonar-issues
+
+permissions:
+  contents: read
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query current SonarCloud issues
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+
+          base = "https://sonarcloud.io/api/issues/search"
+          params = {
+              "componentKeys": "jacobsscoots_home-assistant-autodoctor",
+              "resolved": "false",
+              "ps": "100",
+              "additionalFields": "_all",
+          }
+          url = base + "?" + urllib.parse.urlencode(params)
+          with urllib.request.urlopen(url, timeout=30) as response:
+              payload = json.load(response)
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
