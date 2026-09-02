@@ -74,12 +74,12 @@ configuration:
     description: Enables fail-closed diagnostic reads only. AutoDoctor never exposes generic MCP tools to the AI and denies every tool not on its built-in read allowlist.
   mcp_url:
     name: MCP URL
-    description: Absolute HTTP(S) endpoint for the Home Assistant MCP server. Credentials, query parameters and fragments are rejected.
+    description: Absolute HTTP(S) endpoint. homeassistant-ai/ha-mcp secret-path URLs (/private_...) are supported without a bearer token; other supported MCP servers require mcp_token.
   mcp_token:
-    name: Dedicated MCP Long-Lived Access Token
-    description: Used only for the configured MCP connection and never included in AI context or MCP audit records.
+    name: MCP bearer token (when required)
+    description: Optional for homeassistant-ai/ha-mcp secret-path endpoints. When configured it is used only for the MCP connection and never included in AI context or MCP audit records.
   notify_on_new_incident:
     name: Notify on new incident
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.2.0 still cannot apply changes.
+    description: Reserved for the validated executor. v0.2.1 still cannot apply changes.
