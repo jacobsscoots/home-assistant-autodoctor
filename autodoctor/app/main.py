@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from autodoctor.case_dashboard import CaseDashboard
+from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
-from autodoctor.dashboard import Dashboard
-from autodoctor.engine import AutoDoctorEngine
 from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
 from autodoctor.mcp_backend import MCPBackend
@@ -29,11 +29,17 @@ async def async_main() -> None:
     ha = HomeAssistantClient()
     llm = build_provider(settings)
     mcp = MCPBackend(settings)
-    engine = AutoDoctorEngine(settings, store, ha, llm, mcp)
-    dashboard = Dashboard(settings, store, engine)
+    engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
+    dashboard = CaseDashboard(settings, store, engine)
 
     await store.initialize()
     await mcp.start()
+    reconciliation = await engine.initialize_case_management()
+    logging.getLogger(__name__).info(
+        "Case backlog reconciliation complete: cases=%s legacy_notifications_dismissed=%s",
+        reconciliation.get("cases", 0),
+        reconciliation.get("legacy_notifications_dismissed", 0),
+    )
     await dashboard.start()
 
     try:
