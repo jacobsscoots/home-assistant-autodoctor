@@ -14,7 +14,6 @@ sys.path.insert(0, str(ROOT))
 from autodoctor.config import Settings
 from autodoctor.mcp_backend import MCPBackend, READ_ONLY_TOOLS
 
-
 _MUTATING_TOOLS = {
     "call_service",
     "create_calendar_event",
@@ -139,7 +138,7 @@ def test_denied_tool_fails_before_network_and_is_audited(tmp_path: Path) -> None
     assert "super-secret-token" not in serialized
 
 
-def test_allowed_tool_sanitizes_and_bounds_result(tmp_path: Path) -> None:
+def test_allowed_tool_sanitizes_secret_location_and_entity_data(tmp_path: Path) -> None:
     async def run() -> None:
         value = backend(tmp_path)
         fake = FakeClient(
@@ -150,6 +149,9 @@ def test_allowed_tool_sanitizes_and_bounds_result(tmp_path: Path) -> None:
                         "entity_id": "sensor.private_phone",
                         "address": "192.168.1.55",
                         "token": "raw-secret-value",
+                        "latitude": 51.12345,
+                        "longitude": -1.23456,
+                        "location_name": "Private Home",
                         "state": "unavailable",
                     }
                 )
@@ -157,13 +159,14 @@ def test_allowed_tool_sanitizes_and_bounds_result(tmp_path: Path) -> None:
         )
         value._session = lambda: (FakeHTTPClient(), fake)  # type: ignore[method-assign]
         result = await value.call_readonly(
-            "get_state",
-            {"entity_id": "sensor.private_phone"},
-            purpose="test state read",
+            "get_state", {"entity_id": "sensor.private_phone"}, purpose="test state read"
         )
         assert result["entity_id"] == "<ENTITY>"
         assert result["address"] == "<IP>"
         assert result["token"] == "<REDACTED>"
+        assert result["latitude"] == "<REDACTED>"
+        assert result["longitude"] == "<REDACTED>"
+        assert result["location_name"] == "<REDACTED>"
         assert result["state"] == "unavailable"
         assert fake.calls == [("get_state", {"entity_id": "sensor.private_phone"})]
 
@@ -190,7 +193,7 @@ def test_server_reported_tool_error_fails_closed_and_is_audited(tmp_path: Path) 
     assert records[-1]["success"] is False
 
 
-def test_refresh_calls_only_automatic_read_context_tools(tmp_path: Path) -> None:
+def test_refresh_calls_only_minimal_automatic_context_tools(tmp_path: Path) -> None:
     async def run() -> None:
         value = backend(tmp_path)
         exposed = {
@@ -204,7 +207,9 @@ def test_refresh_calls_only_automatic_read_context_tools(tmp_path: Path) -> None
         fake = FakeClient(
             exposed,
             {
-                "get_config": FakeResult(structured={"version": "2026.9.0"}),
+                "get_config": FakeResult(
+                    structured={"version": "2026.9.0", "latitude": 51.1, "longitude": -1.2}
+                ),
                 "get_system_status": FakeResult(
                     structured={"problem_entities": ["sensor.private_phone"]}
                 ),
@@ -215,19 +220,17 @@ def test_refresh_calls_only_automatic_read_context_tools(tmp_path: Path) -> None
         )
         value._session = lambda: (FakeHTTPClient(), fake)  # type: ignore[method-assign]
         assert await value.refresh_context()
-        assert [name for name, _ in fake.calls] == [
-            "get_config",
-            "get_system_status",
-            "list_integrations",
-        ]
+        assert [name for name, _ in fake.calls] == ["get_system_status", "list_integrations"]
         cached = value.get_relevant_config()
         assert cached["mode"] == "read-only"
+        assert "get_config" not in cached["diagnostic_context"]
         assert cached["diagnostic_context"]["get_system_status"]["problem_entities"] == [
             "<ENTITY>"
         ]
         health = await value.health()
         assert health["connected"] is True
         assert health["mode"] == "read-only"
+        assert health["auto_context_tools"] == ["get_system_status", "list_integrations"]
         assert health["blocked_server_tools_count"] == 3
         assert "restart_ha" in health["blocked_server_tools_sample"]
 
@@ -256,11 +259,25 @@ def test_disabled_mcp_never_opens_session(tmp_path: Path) -> None:
             "enabled": False,
             "connected": False,
             "mode": "read-only",
-            "auto_context_tools": ["get_config", "get_system_status", "list_integrations"],
+            "auto_context_tools": ["get_system_status", "list_integrations"],
         }
         await value.close()
 
     asyncio.run(run())
+
+
+def test_allowlisted_call_when_disabled_is_audited_without_network(tmp_path: Path) -> None:
+    async def run() -> None:
+        value = backend(tmp_path, enabled=False)
+        value._session = lambda: (_ for _ in ()).throw(AssertionError("network touched"))  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="disabled"):
+            await value.call_readonly("get_state", {"entity_id": "sensor.foo"})
+
+    asyncio.run(run())
+    records = read_audit(tmp_path / "mcp-audit.log")
+    assert records[-1]["tool"] == "get_state"
+    assert records[-1]["allowed"] is True
+    assert records[-1]["success"] is False
 
 
 def test_mcp_url_rejects_credentials_query_and_non_http_schemes(tmp_path: Path) -> None:
