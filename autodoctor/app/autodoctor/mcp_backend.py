@@ -16,9 +16,7 @@ from .redact import redact
 
 _LOG = logging.getLogger(__name__)
 
-# Explicitly allow only diagnostic reads. Anything not listed here is denied before a
-# network tool call is made, even if the upstream MCP server exposes it.
-READ_ONLY_TOOLS = frozenset(
+_LEGACY_READ_ONLY_TOOLS = frozenset(
     {
         "get_state",
         "batch_get_state",
@@ -54,10 +52,34 @@ READ_ONLY_TOOLS = frozenset(
     }
 )
 
-# v0.2.0 automatic enrichment is deliberately much smaller than the read allowlist.
-# get_config stays available for future deterministic local use but is not automatically
-# sent to AI context because upstream implementations may include HA location metadata.
-_AUTO_CONTEXT_TOOLS = ("get_system_status", "list_integrations")
+_HA_MCP_READ_ONLY_TOOLS = frozenset(
+    {
+        "ha_get_overview",
+        "ha_get_state",
+        "ha_search",
+        "ha_get_system_health",
+        "ha_get_integration",
+        "ha_get_history",
+        "ha_get_logs",
+        "ha_get_automation_traces",
+        "ha_get_device",
+        "ha_get_entity",
+        "ha_list_services",
+    }
+)
+
+# Public for tests and policy inspection. This is an explicit union, not a dynamic
+# server-advertised allowlist: unknown future tools remain denied by default.
+READ_ONLY_TOOLS = _LEGACY_READ_ONLY_TOOLS | _HA_MCP_READ_ONLY_TOOLS
+
+_AUTO_CONTEXT_BY_PROFILE: dict[str, tuple[tuple[str, dict[str, Any]], ...]] = {
+    # The existing homeassistant-ai/ha-mcp add-on exposes a stable mandatory overview
+    # reader. Keep the automatic request minimal to avoid unnecessary entity/config data.
+    "ha-mcp": (("ha_get_overview", {"detail_level": "minimal"}),),
+    # Backwards-compatible profile for ganhammar/hass-mcp-server style tool names.
+    "ganhammar": (("get_system_status", {}), ("list_integrations", {})),
+}
+
 _REFRESH_SECONDS = 300
 _MAX_TOOL_PAYLOAD_CHARS = 6000
 _MAX_STRING_CHARS = 1000
@@ -67,17 +89,22 @@ _MAX_DEPTH = 5
 _ENTITY = re.compile(r"\b[a-z_]+\.\w+\b")
 _SENSITIVE_KEY = re.compile(
     r"(?i)(?:api[_-]?key|token|secret|password|authorization|credential|"
-    r"latitude|longitude|location(?:_name)?)"
+    r"latitude|longitude|location(?:_name)?|friendly_name|area(?:_name)?|floor|zone)"
 )
 
 
 class MCPBackend:
-    """Fail-closed, read-only client for ganhammar/hass-mcp-server.
+    """Fail-closed, read-only MCP client with explicit server-profile support.
+
+    v0.2.1 supports both the existing homeassistant-ai/ha-mcp Home Assistant add-on
+    (``ha_*`` tools + secret-path authentication) and the earlier
+    ganhammar/hass-mcp-server style (legacy tool names + bearer token).
 
     The model never receives a generic MCP tool interface. AutoDoctor invokes only
-    deterministic reads named in READ_ONLY_TOOLS, sanitizes and bounds every result,
-    and exposes only a cached diagnostic snapshot to the prompt. Unknown or mutating
-    tool names are rejected locally before any request leaves the add-on.
+    deterministic reads named in READ_ONLY_TOOLS, sanitizes/bounds results and exposes
+    only cached diagnostic context. Unknown or write-capable tools are rejected locally.
+    For the ha-mcp profile, AutoDoctor additionally requires the server to advertise
+    ``readOnlyHint=True`` for every tool before it can be called.
     """
 
     def __init__(
@@ -94,6 +121,8 @@ class MCPBackend:
         self._refresh_task: asyncio.Task[None] | None = None
         self._context_cache: dict[str, Any] = {}
         self._server_tools: set[str] = set()
+        self._server_readonly_hints: dict[str, bool | None] = {}
+        self._profile = "unknown"
         self._last_refresh_at = 0.0
         self._last_refresh_attempt_at = 0.0
         self._last_error = ""
@@ -118,6 +147,20 @@ class MCPBackend:
         logger.addHandler(handler)
         return logger
 
+    def _safe_error(self, error: str) -> str:
+        safe = str(error)
+        if self.token:
+            safe = safe.replace(self.token, "<MCP_TOKEN>")
+        if self.url:
+            safe = safe.replace(self.url, "<MCP_URL>")
+            try:
+                path = urlparse(self.url).path
+            except ValueError:
+                path = ""
+            if path:
+                safe = safe.replace(path, "<MCP_SECRET_PATH>")
+        return redact(safe)[:1000]
+
     def _audit(
         self,
         *,
@@ -137,7 +180,7 @@ class MCPBackend:
             "purpose": str(purpose)[:300],
             "duration_ms": round(max(0.0, float(duration_ms)), 3),
             "success": bool(success),
-            "error": redact(str(error))[:1000],
+            "error": self._safe_error(error),
         }
         self._audit_logger.info(json.dumps(payload, separators=(",", ":")))
 
@@ -153,12 +196,36 @@ class MCPBackend:
         )
 
     @staticmethod
-    def _validate_url(url: str) -> str:
+    def _validate_url_shape(url: str) -> str:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise RuntimeError("mcp_url must be an absolute http(s) URL")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise RuntimeError("mcp_url must not contain credentials, query parameters, or fragments")
+            raise RuntimeError(
+                "mcp_url must not contain embedded credentials, query parameters, or fragments"
+            )
+        return url
+
+    def _auth_mode(self) -> str:
+        if self.token:
+            return "bearer"
+        if not self.url:
+            return "missing"
+        try:
+            parsed = urlparse(self._validate_url_shape(self.url))
+        except RuntimeError:
+            return "missing"
+        first_segment = parsed.path.lstrip("/").split("/", 1)[0]
+        if first_segment.startswith("private_") and len(first_segment) > len("private_"):
+            return "secret-path"
+        return "missing"
+
+    def _validate_url(self, url: str) -> str:
+        self._validate_url_shape(url)
+        if self._auth_mode() == "missing":
+            raise RuntimeError(
+                "mcp authentication missing: configure a bearer mcp_token or a ha-mcp /private_* secret-path URL"
+            )
         return url
 
     def _session(self):
@@ -167,8 +234,9 @@ class MCPBackend:
         from mcp.client.streamable_http import streamable_http_client
 
         url = self._validate_url(self.url)
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         http_client = httpx2.AsyncClient(
-            headers={"Authorization": f"Bearer {self.token}"},
+            headers=headers,
             timeout=httpx2.Timeout(30.0, read=120.0),
             follow_redirects=True,
         )
@@ -231,6 +299,51 @@ class MCPBackend:
                 blocks.append(str(text))
         return blocks[0] if len(blocks) == 1 else blocks
 
+    @staticmethod
+    def _readonly_hint(tool: Any) -> bool | None:
+        annotations = getattr(tool, "annotations", None)
+        if annotations is None:
+            return None
+        for attr in ("readOnlyHint", "read_only_hint"):
+            value = getattr(annotations, attr, None)
+            if value is not None:
+                return bool(value)
+        if isinstance(annotations, dict):
+            for key in ("readOnlyHint", "read_only_hint"):
+                if key in annotations:
+                    return bool(annotations[key])
+        return None
+
+    @staticmethod
+    def _detect_profile(names: set[str]) -> str:
+        if "ha_get_overview" in names or "ha_get_state" in names:
+            return "ha-mcp"
+        if names & _LEGACY_READ_ONLY_TOOLS:
+            return "ganhammar"
+        return "unknown"
+
+    def _record_catalog(self, tools: Any) -> None:
+        items = list(getattr(tools, "tools", None) or [])
+        self._server_tools = {str(item.name) for item in items}
+        self._server_readonly_hints = {
+            str(item.name): self._readonly_hint(item) for item in items
+        }
+        self._profile = self._detect_profile(self._server_tools)
+        if self._profile == "unknown":
+            raise RuntimeError("unsupported MCP server tool profile")
+
+    def _tool_allowed(self, tool: str) -> bool:
+        if tool not in READ_ONLY_TOOLS:
+            return False
+        if self._profile == "ha-mcp":
+            # Defence in depth: homeassistant-ai/ha-mcp has a first-class readOnlyHint
+            # classification. Require the server to confirm it, not merely the name.
+            return self._server_readonly_hints.get(tool) is True
+        return self._profile == "ganhammar"
+
+    def _auto_context_specs(self) -> tuple[tuple[str, dict[str, Any]], ...]:
+        return _AUTO_CONTEXT_BY_PROFILE.get(self._profile, ())
+
     async def _call_with_client(
         self,
         client: Any,
@@ -264,6 +377,18 @@ class MCPBackend:
                 error="allowlisted tool is not exposed by the configured MCP server",
             )
             raise RuntimeError(f"Configured MCP server does not expose allowlisted tool: {tool}")
+        if not self._tool_allowed(tool):
+            duration = (time.monotonic() - started) * 1000.0
+            self._audit(
+                correlation_id=correlation_id,
+                tool=tool,
+                allowed=False,
+                purpose=purpose,
+                duration_ms=duration,
+                success=False,
+                error="server catalog did not confirm this tool as read-only",
+            )
+            raise PermissionError(f"MCP server did not confirm read-only safety for tool: {tool}")
         try:
             result = await client.call_tool(tool, arguments or {})
             safe = self._bound_payload(self._decode_tool_result(result))
@@ -304,9 +429,9 @@ class MCPBackend:
         if not self.enabled:
             self._audit_local_failure(tool, purpose, "MCP is disabled")
             raise RuntimeError("MCP is disabled")
-        if not self.url or not self.token:
-            self._audit_local_failure(tool, purpose, "mcp_url/mcp_token missing")
-            raise RuntimeError("mcp_url/mcp_token missing")
+        if not self.url or self._auth_mode() == "missing":
+            self._audit_local_failure(tool, purpose, "MCP URL/authentication missing")
+            raise RuntimeError("MCP URL/authentication missing")
         try:
             http_client, client = self._session()
         except Exception as exc:
@@ -314,36 +439,37 @@ class MCPBackend:
             raise
         async with http_client:
             async with client:
-                tools = await client.list_tools()
-                self._server_tools = {str(item.name) for item in tools.tools}
+                self._record_catalog(await client.list_tools())
                 self._connected = True
                 return await self._call_with_client(client, tool, arguments, purpose=purpose)
 
     async def _refresh_once(self) -> None:
         if not self.enabled:
             return
-        if not self.url or not self.token:
-            raise RuntimeError("mcp_url/mcp_token missing")
+        if not self.url or self._auth_mode() == "missing":
+            raise RuntimeError("MCP URL/authentication missing")
         http_client, client = self._session()
         async with http_client:
             async with client:
-                tools = await client.list_tools()
-                self._server_tools = {str(item.name) for item in tools.tools}
+                self._record_catalog(await client.list_tools())
                 self._connected = True
                 refreshed: dict[str, Any] = {}
-                for tool in _AUTO_CONTEXT_TOOLS:
+                for tool, arguments in self._auto_context_specs():
                     if tool not in self._server_tools:
                         continue
                     try:
                         refreshed[tool] = await self._call_with_client(
                             client,
                             tool,
-                            {},
+                            arguments,
                             purpose="automatic bounded diagnostic context",
                         )
                     except Exception as exc:
-                        _LOG.warning("Read-only MCP enrichment %s failed: %s", tool, redact(str(exc)))
-                # An empty successful refresh must clear stale context from a previous server/tool set.
+                        _LOG.warning(
+                            "Read-only MCP enrichment %s failed: %s",
+                            tool,
+                            self._safe_error(str(exc)),
+                        )
                 self._context_cache = refreshed
                 self._last_refresh_at = time.time()
                 self._last_error = ""
@@ -357,7 +483,8 @@ class MCPBackend:
             raise
         except Exception as exc:
             self._connected = False
-            self._last_error = redact(str(exc))[:1000]
+            self._context_cache = {}
+            self._last_error = self._safe_error(str(exc))
             _LOG.warning("Read-only MCP refresh failed: %s", self._last_error)
             return False
 
@@ -392,20 +519,27 @@ class MCPBackend:
                 "enabled": False,
                 "connected": False,
                 "mode": "read-only",
-                "auto_context_tools": list(_AUTO_CONTEXT_TOOLS),
+                "server_profile": "unknown",
+                "auth_mode": self._auth_mode(),
+                "auto_context_tools": [],
             }
-        blocked_exposed = sorted(self._server_tools - READ_ONLY_TOOLS)
+        allowed_available = sorted(
+            tool for tool in self._server_tools if self._tool_allowed(tool)
+        )
+        blocked_exposed = sorted(self._server_tools - set(allowed_available))
         return {
             "enabled": True,
             "connected": bool(self._connected),
             "mode": "read-only",
+            "server_profile": self._profile,
+            "auth_mode": self._auth_mode(),
             "last_refresh_at": self._last_refresh_at or None,
             "last_refresh_attempt_at": self._last_refresh_attempt_at or None,
             "cached_context_tools": sorted(self._context_cache),
-            "allowlisted_tools_available": sorted(self._server_tools & READ_ONLY_TOOLS),
+            "allowlisted_tools_available": allowed_available,
             "blocked_server_tools_count": len(blocked_exposed),
             "blocked_server_tools_sample": blocked_exposed[:12],
-            "auto_context_tools": list(_AUTO_CONTEXT_TOOLS),
+            "auto_context_tools": [tool for tool, _ in self._auto_context_specs()],
             "audit_log": str(self._audit_path),
             "error": self._last_error or None,
         }
@@ -415,6 +549,7 @@ class MCPBackend:
             return {}
         return {
             "mode": "read-only",
+            "server_profile": self._profile,
             "last_refresh_at": self._last_refresh_at or None,
             "diagnostic_context": dict(self._context_cache),
         }
