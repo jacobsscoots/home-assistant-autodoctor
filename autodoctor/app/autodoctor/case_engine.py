@@ -9,6 +9,15 @@ from .investigator import TargetedReadOnlyInvestigator
 from .llm import NoProvider
 from .models import AIResult, LogEvent
 
+_REPAIR_PLANNING_GUIDANCE = """
+If action=propose_fix, proposed_changes must be a list of structured proposal objects.
+Each proposal should use these keys when applicable: operation, target, reason,
+expected_result, rollback, preconditions. Do not invent a target identifier. If the
+exact target is not present in the supplied evidence, use operation=manual_review and
+explain what must be discovered first. A proposal is NOT approval and has NOT been
+executed. Never instruct AutoDoctor to bypass its read-only MCP boundary.
+""".strip()
+
 
 class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
     """v0.3 engine layer that adds case management without changing diagnosis policy."""
@@ -72,6 +81,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             "\n\nTargeted read-only MCP evidence selected deterministically by AutoDoctor "
             "(the AI did not choose these tools):\n"
             + json.dumps(targeted, ensure_ascii=False, indent=2)
+            + "\n\nRepair-planning contract:\n"
+            + _REPAIR_PLANNING_GUIDANCE
         )
 
         reservation = await self._reserve_analysis(prompt, fp, family, pattern_key)
