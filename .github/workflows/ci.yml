@@ -7,10 +7,12 @@ on:
     paths:
       - 'autodoctor/**'
       - '.github/workflows/ci.yml'
+      - 'sonar-project.properties'
   pull_request:
     paths:
       - 'autodoctor/**'
       - '.github/workflows/ci.yml'
+      - 'sonar-project.properties'
 
 permissions:
   contents: read
@@ -49,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Build Home Assistant app image
+      - name: Build and start-test Home Assistant app image
         run: |
           APP_VERSION="$(python3 - <<'PY'
           from pathlib import Path
@@ -63,8 +65,19 @@ jobs:
           PY
           )"
           test -n "$APP_VERSION"
+          IMAGE="autodoctor-ci:$APP_VERSION"
           echo "Building AutoDoctor $APP_VERSION"
           docker build \
             --build-arg BUILD_VERSION="$APP_VERSION" \
             --build-arg BUILD_ARCH=amd64 \
+            -t "$IMAGE" \
             autodoctor
+
+          # A successful build does not validate Docker's configured USER. Actually create
+          # and start a container so malformed USER directives fail CI before release.
+          echo "Smoke-starting $IMAGE"
+          docker run --rm --entrypoint /bin/sh "$IMAGE" -c '
+            test "$(id -u)" = "0"
+            test -r /app/main.py
+            test -x /run.sh
+          '
