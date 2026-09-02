@@ -1,9 +1,10 @@
 name: "AutoDoctor"
-version: "0.3.0"
+version: "0.4.0"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
-  cases, gathers bounded read-only diagnostics, and produces conservative repair plans.
+  cases, gathers bounded read-only diagnostics, produces conservative repair plans,
+  and can execute a tiny approval-gated deterministic repair allowlist.
 url: "https://github.com/jacobsscoots/home-assistant-autodoctor"
 startup: application
 boot: auto
@@ -45,6 +46,8 @@ options:
   mcp_url: ""
   mcp_token: ""
   notify_on_new_incident: true
+  repair_executor_enabled: false
+  repair_verification_seconds: 120
   auto_apply_low_risk: false
 schema:
   min_level: "list(WARNING|ERROR)"
@@ -75,4 +78,6 @@ schema:
   mcp_url: password
   mcp_token: password
   notify_on_new_incident: bool
+  repair_executor_enabled: bool
+  repair_verification_seconds: "int(30,3600)"
   auto_apply_low_risk: bool
