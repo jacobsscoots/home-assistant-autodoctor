@@ -31,12 +31,14 @@ async def async_main() -> None:
     dashboard = Dashboard(settings, store, engine)
 
     await store.initialize()
+    await mcp.start()
     await dashboard.start()
 
     try:
         await engine.run_forever()
     finally:
         await dashboard.stop()
+        await mcp.close()
         await ha.close()
         await llm.close()
 

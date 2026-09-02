@@ -57,7 +57,8 @@ class Dashboard:
     @staticmethod
     def _mcp_status(mcp: dict[str, Any]) -> str:
         if mcp.get("connected"):
-            return "connected"
+            mode = str(mcp.get("mode") or "")
+            return f"{mode} connected" if mode else "connected"
         if not mcp.get("enabled"):
             return "disabled"
         return "not connected"
@@ -88,6 +89,7 @@ class Dashboard:
         topology_text = f"{int(memory.get('topology_nodes', 0))} / {int(memory.get('topology_edges', 0))}"
         alias_text = str(int(memory.get("stable_entity_aliases", 0)))
         fts_text = "FTS5" if memory.get("fts5_available") else "fallback"
+        blocked_tools = int(mcp.get("blocked_server_tools_count", 0))
         body = f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="20"><title>AutoDoctor</title>
@@ -121,9 +123,10 @@ small{{color:#9ca3af}}
 <div><div class="k">Startup grace</div><div class="v">{int(scheduler.get('startup_grace_remaining_seconds', 0))}s</div></div>
 <div><div class="k">Deferrals B / F / H / P</div><div class="v">{html.escape(deferral_text)}</div></div>
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
+<div><div class="k">MCP blocked tools exposed</div><div class="v">{blocked_tools}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.1.7 stabilizes volatile incident fingerprints and adds pattern-level AI cooldown while keeping bounded local history, observed topology and read-only diagnoses. The repair executor remains hard-disabled.</div>
+<div class="card"><strong>Safety:</strong> v0.2.0 can add bounded read-only MCP diagnostics through a deny-by-default tool allowlist. Generic MCP tool calling and the repair executor remain disabled.</div>
 <div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Pattern</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")
