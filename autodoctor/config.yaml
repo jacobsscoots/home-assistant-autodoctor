@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.2.0"
+version: "0.2.1"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, deduplicates incidents, asks an AI
