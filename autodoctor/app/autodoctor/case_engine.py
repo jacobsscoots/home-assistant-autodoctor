@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from .ai_usage_recovery import abandon_ai_usage_before_provider, mark_ai_usage_inflight
 from .cases import IncidentCaseManager
 from .engine import AutoDoctorEngine
 from .investigator import TargetedReadOnlyInvestigator
@@ -130,6 +131,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
     ) -> bool:
         if not await self._claim_pattern(pattern_key):
             return False
+        usage_id: int | None = None
+        provider_started = False
         try:
             prompt = await self._prepare_prompt(
                 event,
@@ -161,6 +164,9 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
                 pattern_key,
                 fp,
             )
+            if not await mark_ai_usage_inflight(self.store.path, usage_id):
+                raise RuntimeError("AI usage reservation could not enter inflight state; provider call blocked")
+            provider_started = True
             await self._execute_analysis(
                 prompt,
                 usage_id=usage_id,
@@ -175,6 +181,15 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         except asyncio.CancelledError:
             raise
         except Exception:
+            if usage_id is not None and not provider_started:
+                try:
+                    await abandon_ai_usage_before_provider(
+                        self.store.path,
+                        usage_id,
+                        "Case analysis failed before external provider call began; reservation released",
+                    )
+                except Exception:
+                    _LOG.exception("Could not release pre-provider AI reservation id=%s", usage_id)
             _LOG.exception(
                 "Could not prepare or execute %s case analysis pattern=%s fingerprint=%s",
                 source,
