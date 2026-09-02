@@ -69,6 +69,8 @@ class Dashboard:
         rows = "".join(self._row(item) for item in incidents) or '<tr><td colspan="8">No incidents captured yet.</td></tr>'
         mcp = health.get("mcp", {})
         mcp_text = self._mcp_status(mcp)
+        mcp_profile = str(mcp.get("server_profile") or "unknown")
+        mcp_auth = str(mcp.get("auth_mode") or "missing")
         budget = health.get("ai_budget", {})
         scheduler = health.get("ai_scheduler", {})
         memory = health.get("memory", {})
@@ -123,10 +125,12 @@ small{{color:#9ca3af}}
 <div><div class="k">Startup grace</div><div class="v">{int(scheduler.get('startup_grace_remaining_seconds', 0))}s</div></div>
 <div><div class="k">Deferrals B / F / H / P</div><div class="v">{html.escape(deferral_text)}</div></div>
 <div><div class="k">MCP</div><div class="v">{html.escape(mcp_text)}</div></div>
+<div><div class="k">MCP profile</div><div class="v">{html.escape(mcp_profile)}</div></div>
+<div><div class="k">MCP auth</div><div class="v">{html.escape(mcp_auth)}</div></div>
 <div><div class="k">MCP blocked tools exposed</div><div class="v">{blocked_tools}</div></div>
 <div><div class="k">Auto apply</div><div class="v">OFF</div></div>
 </div>
-<div class="card"><strong>Safety:</strong> v0.2.0 can add bounded read-only MCP diagnostics through a deny-by-default tool allowlist. Generic MCP tool calling and the repair executor remain disabled.</div>
+<div class="card"><strong>Safety:</strong> v0.2.1 supports explicit read-only MCP profiles, including the existing ha-mcp add-on. Unknown/write tools remain fail-closed and the repair executor remains disabled.</div>
 <div class="card"><table><thead><tr><th>Last seen</th><th>Count</th><th>Pattern</th><th>Level</th><th>Source</th><th>Message</th><th>AI</th><th>Fingerprint</th></tr></thead><tbody>{rows}</tbody></table></div>
 </body></html>"""
         return web.Response(text=body, content_type="text/html")

@@ -11,12 +11,12 @@ AutoDoctor treats the **live Home Assistant instance** as its source of truth. R
 of `automations.yaml`, `scripts.yaml`, `configuration.yaml`, helpers, or entity inventories may be
 stale and must not be used to infer current repair targets.
 
-v0.2.0 still does not mount `/config`. With MCP disabled it uses live events/entity states exactly
+v0.2.1 still does not mount `/config`. With MCP disabled it uses live events/entity states exactly
 as before. With MCP enabled it may add a small bounded snapshot from explicit read-only MCP tools.
 
 ## Safety boundary
 
-**v0.2.0 cannot intentionally modify Home Assistant.** The repair executor remains hard-disabled
+**v0.2.1 cannot intentionally modify Home Assistant.** The repair executor remains hard-disabled
 even if the `auto_apply_low_risk` option is enabled.
 
 Current pipeline:
@@ -144,8 +144,8 @@ External AI context is bounded and redacted. Referenced entity IDs are replaced 
 pseudonyms before they leave Home Assistant, and `friendly_name` is excluded from external AI context.
 
 MCP result payloads receive an additional recursive sanitization/bounding pass before entering AI
-context. Known secret fields, IP addresses, email addresses, entity IDs and location coordinates
-are removed or replaced.
+context. Known secret fields, IP addresses, email addresses, entity IDs, location coordinates,
+area/floor/zone labels and friendly names are removed or replaced.
 
 ## Feedback-loop protection
 
@@ -163,23 +163,29 @@ API usage is billed separately from consumer ChatGPT/Claude subscriptions.
 
 ## MCP
 
-v0.2.0 adds optional **read-only** Home Assistant MCP enrichment using the MCP Python SDK v2
-Streamable HTTP transport. The SDK intentionally uses `httpx2`, not `httpx`, and AutoDoctor pins
-both dependencies in its container build.
+v0.2.1 adds compatibility for the existing `homeassistant-ai/ha-mcp` Home Assistant add-on while
+retaining the v0.2.0 bearer-token profile. Both use the MCP Python SDK v2 Streamable HTTP transport.
 
-When enabled, AutoDoctor automatically refreshes only two small diagnostic reads every five
-minutes: `get_system_status` and `list_integrations`. Results are cached, bounded and redacted
-before they are added to a diagnosis. `get_config` is intentionally excluded from automatic AI
-context because upstream responses may include Home Assistant location metadata. The AI cannot
-request MCP tools itself.
+For `homeassistant-ai/ha-mcp`, AutoDoctor recognizes the server from its live `ha_*` tool catalog,
+uses the add-on's `/private_...` secret-path URL without requiring a bearer token, and additionally
+requires every allowlisted tool it calls to advertise `readOnlyHint=True`. Automatic enrichment is
+limited to `ha_get_overview` with `detail_level="minimal"` every five minutes.
 
-Every AutoDoctor tool attempt is recorded without arguments/results in the rotating local
-`/data/mcp_audit.log`, including locally rejected attempts. Unknown tools and all non-allowlisted
-tools fail closed before network tool execution.
+For the earlier bearer-token profile, automatic enrichment remains limited to `get_system_status`
+and `list_integrations`.
 
-Use a dedicated Home Assistant user/token with the least permissions compatible with the required
-reads. A token may technically retain permissions broader than AutoDoctor's local allowlist, so
-credential least privilege remains defence in depth rather than a substitute for the application
-boundary.
+The AI cannot request MCP tools itself. Every AutoDoctor tool attempt is recorded without
+arguments/results in the rotating local `/data/mcp_audit.log`, including locally rejected attempts.
+Unknown tools and all non-allowlisted tools fail closed before network tool execution.
 
-See `MCP_READ_ONLY.md` for the allowlist, audit format, setup and acceptance checks.
+The complete secret-path URL is treated as a credential: `mcp_url` is masked in the add-on options
+UI, and AutoDoctor scrubs the URL/path from errors and audit records. Bearer tokens are handled the
+same way.
+
+The `homeassistant-ai/ha-mcp` server also has its own optional Read Only Mode. It is useful as a
+second independent guard when that MCP server is dedicated to AutoDoctor, but AutoDoctor does not
+rely on it and it should not be enabled blindly if other clients intentionally use the same server
+for Home Assistant control.
+
+See `MCP_READ_ONLY.md` for the profiles, allowlists, authentication rules, audit format and
+acceptance checks.

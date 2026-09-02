@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.2.0"
+version: "0.2.1"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, deduplicates incidents, asks an AI
@@ -73,7 +73,7 @@ schema:
   memory_quiet_outcome_seconds: "int(3600,2592000)"
   memory_worsened_recurrences: "int(2,1000)"
   mcp_enabled: bool
-  mcp_url: str
+  mcp_url: password
   mcp_token: password
   notify_on_new_incident: bool
   auto_apply_low_risk: bool
