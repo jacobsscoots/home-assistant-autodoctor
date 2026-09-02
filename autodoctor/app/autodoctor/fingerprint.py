@@ -7,13 +7,15 @@ from .models import LogEvent
 from .redact import redact
 
 _UUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,36}\b")
-_NUMBER = re.compile(r"(?<![A-Za-z_])\d+(?:\.\d+)?(?![A-Za-z_])")
+_VOLATILE_JSON_STRING = re.compile(r'("terminal_uuid"\s*:\s*")[^"]*(")', re.IGNORECASE)
+_NUMBER = re.compile(r"(?<![A-Za-z_])[+-]?\d+(?:\.\d+)?(?![A-Za-z_])")
 _HEX_ADDR = re.compile(r"0x[0-9a-fA-F]+")
 _WS = re.compile(r"\s+")
 
 
 def normalize_for_fingerprint(text: str) -> str:
     text = redact(text)
+    text = _VOLATILE_JSON_STRING.sub(r"\1<VOLATILE>\2", text)
     text = _UUID.sub("<UUID>", text)
     text = _HEX_ADDR.sub("<HEX>", text)
     text = _NUMBER.sub("<N>", text)
