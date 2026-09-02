@@ -29,6 +29,8 @@ class ControlDashboard(RepairDashboard):
             f'<div><div class="k">Repair ready</div><div class="v">{int(statuses.get("repair_available", 0))}</div></div>'
             f'<div><div class="k">Triage analyses</div><div class="v">{int(triage.get("analyses", 0))}</div></div>'
             f'<div><div class="k">Triage cycles</div><div class="v">{int(triage.get("runs", 0))}</div></div>'
+            f'<div><div class="k">Rep fallbacks</div><div class="v">{int(triage.get("representative_fallbacks", 0))}</div></div>'
+            f'<div><div class="k">Orphans retired</div><div class="v">{int(triage.get("orphaned_cases_retired", 0))}</div></div>'
             f'<div><div class="k">In flight</div><div class="v">{int(triage.get("in_flight_patterns", 0))}</div></div>'
             f'<div><div class="k">Interval</div><div class="v">{int(triage.get("interval_seconds", 0))}s</div></div>'
             f'<div><div class="k">Last error</div><div class="v">{error_text}</div></div>'
