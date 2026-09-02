@@ -1,0 +1,45 @@
+name: Correct v0.4.4 constants
+
+on:
+  push:
+    branches: [fix/v0.4.4-sonar-hardening]
+    paths: ['.github/workflows/fix-v044-constants.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/v0.4.4-sonar-hardening
+      - name: Correct constant definitions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          fixes = {
+              'autodoctor/app/autodoctor/cases.py': (
+                  '_CASE_BY_PATTERN_SQL = _CASE_BY_PATTERN_SQL',
+                  '_CASE_BY_PATTERN_SQL = "SELECT * FROM incident_cases WHERE pattern_key = ?"',
+              ),
+              'autodoctor/app/autodoctor/mcp_backend.py': (
+                  '_MISSING_AUTH_ERROR = _MISSING_AUTH_ERROR',
+                  '_MISSING_AUTH_ERROR = "MCP URL/authentication missing"',
+              ),
+          }
+          for name, (old, new) in fixes.items():
+              path = Path(name)
+              text = path.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{name}: expected one bad definition, got {text.count(old)}')
+              path.write_text(text.replace(old, new, 1))
+          PY
+          python3 -m compileall -q autodoctor/app autodoctor/tests
+          rm .github/workflows/fix-v044-constants.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: correct Sonar hardening constant definitions"
+          git push origin HEAD:fix/v0.4.4-sonar-hardening
