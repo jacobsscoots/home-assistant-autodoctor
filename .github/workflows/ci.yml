@@ -7,12 +7,12 @@ on:
     paths:
       - 'autodoctor/**'
       - '.github/workflows/ci.yml'
-      - 'sonar-project.properties'
+      - '.sonarcloud.properties'
   pull_request:
     paths:
       - 'autodoctor/**'
       - '.github/workflows/ci.yml'
-      - 'sonar-project.properties'
+      - '.sonarcloud.properties'
 
 permissions:
   contents: read
