@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from autodoctor.ai_usage_recovery import recover_orphaned_ai_usage
 from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
 from autodoctor.control_dashboard import ControlDashboard
@@ -36,19 +37,28 @@ async def async_main() -> None:
     dashboard = ControlDashboard(settings, store, engine, executor)
 
     await store.initialize()
+    ai_usage_recovery = await recover_orphaned_ai_usage(store.path)
     await mcp.start()
     reconciliation = await engine.initialize_case_management()
     interrupted_reopened = await recover_interrupted_case_investigations(engine)
     reconciliation["interrupted_investigations_reopened"] = interrupted_reopened
+    reconciliation["ai_usage_recovery"] = ai_usage_recovery.as_dict()
     engine.backlog_reconciliation = dict(reconciliation)
     await executor.initialize()
     resumed = await executor.resume_pending_verifications()
     logging.getLogger(__name__).info(
         "Case backlog reconciliation complete: cases=%s legacy_notifications_dismissed=%s "
-        "interrupted_investigations_reopened=%s; pending_repair_verifications_resumed=%s",
+        "interrupted_investigations_reopened=%s; AI usage recovery legacy_unknown=%s "
+        "released_pre_provider=%s retained_inflight=%s released_cost=$%.8f retained_cost=$%.8f; "
+        "pending_repair_verifications_resumed=%s",
         reconciliation.get("cases", 0),
         reconciliation.get("legacy_notifications_dismissed", 0),
         interrupted_reopened,
+        ai_usage_recovery.legacy_unknown,
+        ai_usage_recovery.released_pre_provider,
+        ai_usage_recovery.retained_inflight,
+        ai_usage_recovery.released_cost_usd,
+        ai_usage_recovery.retained_cost_usd,
         resumed,
     )
     await dashboard.start()
