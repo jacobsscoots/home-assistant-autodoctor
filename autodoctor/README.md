@@ -11,19 +11,20 @@ AutoDoctor treats the **live Home Assistant instance** as its source of truth. R
 of `automations.yaml`, `scripts.yaml`, `configuration.yaml`, helpers, or entity inventories may be
 stale and must not be used to infer current repair targets.
 
-v0.1.x reads live events and live entity states only. It does not mount `/config` and does not
-read Home Assistant YAML snapshots at runtime.
+v0.2.0 still does not mount `/config`. With MCP disabled it uses live events/entity states exactly
+as before. With MCP enabled it may add a small bounded snapshot from explicit read-only MCP tools.
 
 ## Safety boundary
 
-**v0.1.x cannot modify Home Assistant.** The repair executor remains hard-disabled even if the
-`auto_apply_low_risk` option is enabled.
+**v0.2.0 cannot intentionally modify Home Assistant.** The repair executor remains hard-disabled
+even if the `auto_apply_low_risk` option is enabled.
 
 Current pipeline:
 
-`system_log_event -> exact fingerprint + broad pattern -> dedupe -> local memory/topology retrieval -> bounded/redacted context -> optional AI diagnosis -> memory/outcome update -> incident record -> dashboard`
+`system_log_event -> exact fingerprint + broad pattern -> dedupe -> local memory/topology retrieval -> bounded/redacted live context -> optional cached read-only MCP context -> optional AI diagnosis -> memory/outcome update -> incident record -> dashboard`
 
-MCP remains optional and does not provide repair execution in v0.1.x.
+The model never receives a generic MCP tool interface. AutoDoctor's MCP client applies a compiled
+read allowlist and rejects unknown or write-capable tools locally before a tool request is sent.
 
 ## Local memory / RAG
 
@@ -90,6 +91,10 @@ broader pattern key so changing details can be grouped into one failure class â€
 query timeouts with different addresses/module lists map to the same local `device_query_timeout`
 pattern.
 
+v0.1.7 hardens exact fingerprints against volatile Kasa KLAP session IDs and signed incidental
+numbers, and adds a pattern-level AI cooldown so a fresh exact fingerprint cannot trigger another
+AI diagnosis of the same broader failure pattern inside the configured cooldown window.
+
 ### Outcome feedback
 
 When an AI hypothesis already exists and the same fingerprint recurs, local memory records that the
@@ -124,8 +129,9 @@ v0.1.3 adds two independent protections against noisy integrations consuming all
 - a startup backlog grace window keeps old incidents recording/deduplicating locally after an app
   restart while prioritising incidents first seen after the current process started.
 
-The global hourly limit, per-incident cooldown, family cap, startup backlog guard, and monthly
-budget are independent brakes. None of them stop local monitoring or incident persistence.
+The global hourly limit, exact-incident cooldown, broader pattern cooldown, family cap, startup
+backlog guard, and monthly budget are independent brakes. None of them stop local monitoring or
+incident persistence.
 
 Safe accounting logs include estimated/resolved token and cost data without logging prompts, API
 keys, authorisation headers, or raw outbound context.
@@ -136,6 +142,9 @@ See `DOCS.md` for configuration details.
 
 External AI context is bounded and redacted. Referenced entity IDs are replaced with stable private
 pseudonyms before they leave Home Assistant, and `friendly_name` is excluded from external AI context.
+
+MCP result payloads receive an additional recursive sanitization/bounding pass before entering AI
+context. Known secret fields, IP addresses, email addresses and entity IDs are removed or replaced.
 
 ## Feedback-loop protection
 
@@ -153,8 +162,21 @@ API usage is billed separately from consumer ChatGPT/Claude subscriptions.
 
 ## MCP
 
-AutoDoctor targets the current MCP Python SDK v2 transport. That SDK intentionally uses `httpx2`,
-not `httpx`, for Streamable HTTP clients. AutoDoctor declares `httpx2` explicitly because
-`mcp_backend.py` imports it directly.
+v0.2.0 adds optional **read-only** Home Assistant MCP enrichment using the MCP Python SDK v2
+Streamable HTTP transport. The SDK intentionally uses `httpx2`, not `httpx`, and AutoDoctor pins
+both dependencies in its container build.
 
-Do not reuse an administrator's general-purpose token for future MCP work.
+When enabled, AutoDoctor automatically refreshes only three small diagnostic reads every five
+minutes: `get_config`, `get_system_status`, and `list_integrations`. Results are cached, bounded and
+redacted before they are added to a diagnosis. The AI cannot request MCP tools itself.
+
+Every actual tool attempt is recorded without arguments/results in the rotating local
+`/data/mcp_audit.log`. Unknown tools and all non-allowlisted tools fail closed before network tool
+execution.
+
+Use a dedicated Home Assistant user/token with the least permissions compatible with the required
+reads. A token may technically retain permissions broader than AutoDoctor's local allowlist, so
+credential least privilege remains defence in depth rather than a substitute for the application
+boundary.
+
+See `MCP_READ_ONLY.md` for the allowlist, audit format, setup and acceptance checks.
