@@ -56,6 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_repair_plans_pattern_created
 ON repair_plans(pattern_key, created_at DESC);
 """
 
+_BACKLOG_ACTIVE_WINDOW_SECONDS = 24 * 3600
 _ACTIVE_STATUSES = {
     "new",
     "investigating",
@@ -159,7 +160,7 @@ class IncidentCaseManager:
                 )
             else:
                 status = str(existing["status"] or "new")
-                if status == "resolved":
+                if status in {"resolved", "historical"}:
                     status = "reopened"
                 db.execute(
                     """UPDATE incident_cases SET
@@ -192,25 +193,28 @@ class IncidentCaseManager:
         for row in incident_rows:
             fp = str(row.get("fingerprint") or "")
             key = str(row.get("pattern_key") or f"fingerprint/{fp}")
+            row_first = float(row.get("first_seen") or 0)
+            row_last = float(row.get("last_seen") or 0)
             item = groups.setdefault(
                 key,
                 {
                     "pattern_key": key,
                     "pattern_label": str(row.get("pattern_label") or key),
                     "family": "unknown",
-                    "first_seen": float(row.get("first_seen") or 0),
-                    "last_seen": float(row.get("last_seen") or 0),
+                    "first_seen": row_first,
+                    "last_seen": row_last,
                     "occurrences": 0,
                     "fingerprints": 0,
                     "representative_fingerprint": fp,
                 },
             )
-            item["first_seen"] = min(item["first_seen"], float(row.get("first_seen") or item["first_seen"]))
-            item["last_seen"] = max(item["last_seen"], float(row.get("last_seen") or item["last_seen"]))
+            if row_first:
+                item["first_seen"] = min(float(item["first_seen"] or row_first), row_first)
+            if row_last >= float(item["last_seen"] or 0):
+                item["last_seen"] = row_last
+                item["representative_fingerprint"] = fp
             item["occurrences"] += int(row.get("occurrences") or 0)
             item["fingerprints"] += 1
-            if float(row.get("last_seen") or 0) >= item["last_seen"]:
-                item["representative_fingerprint"] = fp
             if fp and self.notifications_enabled:
                 try:
                     await self.ha.dismiss_notification(f"autodoctor_{fp}")
@@ -229,13 +233,17 @@ class IncidentCaseManager:
 
     def _merge_backlog_sync(self, groups: list[dict[str, Any]]) -> None:
         now = self._now()
+        active_cutoff = now - _BACKLOG_ACTIVE_WINDOW_SECONDS
         with sqlite3.connect(self.db_path) as db:
             for item in groups:
                 existing = db.execute(
                     "SELECT status FROM incident_cases WHERE pattern_key = ?",
                     (item["pattern_key"],),
                 ).fetchone()
-                status = str(existing[0]) if existing else "new"
+                if existing:
+                    status = str(existing[0])
+                else:
+                    status = "new" if float(item["last_seen"] or 0) >= active_cutoff else "historical"
                 db.execute(
                     """INSERT INTO incident_cases
                     (pattern_key, pattern_label, family, status, first_seen, last_seen,
