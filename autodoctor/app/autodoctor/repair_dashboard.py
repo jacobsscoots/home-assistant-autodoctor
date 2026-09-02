@@ -116,7 +116,8 @@ class RepairDashboard(CaseDashboard):
             f'<div><strong>{self._plan_summary(plan)}</strong></div>'
             f'<div><small>Status: {status} · Risk: {risk} · Confidence: {confidence:.2f} · Type: '
             f'{html.escape(str(plan.get("repair_type") or "manual_review"))}</small></div>'
-            '<div><small>Approval executes only the fixed, independently validated repair type shown above. '</n            'The AI cannot call this endpoint or choose a different Home Assistant service.</small></div>'
+            '<div><small>Approval executes only the fixed, independently validated repair type shown above. '
+            'The AI cannot call this endpoint or choose a different Home Assistant service.</small></div>'
             f'<div style="margin-top:10px">{controls}</div>'
             '</div>'
         )
