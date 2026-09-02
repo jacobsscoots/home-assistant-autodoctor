@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from autodoctor.case_dashboard import CaseDashboard
 from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
-from autodoctor.dashboard import Dashboard
 from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
 from autodoctor.mcp_backend import MCPBackend
@@ -30,7 +30,7 @@ async def async_main() -> None:
     llm = build_provider(settings)
     mcp = MCPBackend(settings)
     engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
-    dashboard = Dashboard(settings, store, engine)
+    dashboard = CaseDashboard(settings, store, engine)
 
     await store.initialize()
     await mcp.start()
