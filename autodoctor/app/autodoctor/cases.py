@@ -67,6 +67,8 @@ _ACTIVE_STATUSES = {
     "reopened",
 }
 
+_CASE_BY_PATTERN_SQL = "SELECT * FROM incident_cases WHERE pattern_key = ?"
+
 
 class IncidentCaseManager:
     """Pattern-level incident lifecycle and notification ownership.
@@ -137,7 +139,7 @@ class IncidentCaseManager:
         with sqlite3.connect(self.db_path) as db:
             db.row_factory = sqlite3.Row
             existing = db.execute(
-                "SELECT * FROM incident_cases WHERE pattern_key = ?", (key,)
+                _CASE_BY_PATTERN_SQL, (key,)
             ).fetchone()
             is_new_case = existing is None
             if is_new_case:
@@ -182,46 +184,55 @@ class IncidentCaseManager:
                 )
             db.commit()
             row = db.execute(
-                "SELECT * FROM incident_cases WHERE pattern_key = ?", (key,)
+                _CASE_BY_PATTERN_SQL, (key,)
             ).fetchone()
             return dict(row), is_new_case
+
+    @staticmethod
+    def _aggregate_backlog_row(groups: dict[str, dict[str, Any]], row: dict[str, Any]) -> str:
+        fp = str(row.get("fingerprint") or "")
+        key = str(row.get("pattern_key") or f"fingerprint/{fp}")
+        row_first = float(row.get("first_seen") or 0)
+        row_last = float(row.get("last_seen") or 0)
+        item = groups.setdefault(
+            key,
+            {
+                "pattern_key": key,
+                "pattern_label": str(row.get("pattern_label") or key),
+                "family": "unknown",
+                "first_seen": row_first,
+                "last_seen": row_last,
+                "occurrences": 0,
+                "fingerprints": 0,
+                "representative_fingerprint": fp,
+            },
+        )
+        if row_first:
+            item["first_seen"] = min(float(item["first_seen"] or row_first), row_first)
+        if row_last >= float(item["last_seen"] or 0):
+            item["last_seen"] = row_last
+            item["representative_fingerprint"] = fp
+        item["occurrences"] += int(row.get("occurrences") or 0)
+        item["fingerprints"] += 1
+        return fp
+
+    async def _dismiss_legacy_notification(self, fingerprint: str) -> bool:
+        if not fingerprint or not self.notifications_enabled:
+            return False
+        try:
+            await self.ha.dismiss_notification(f"autodoctor_{fingerprint}")
+            return True
+        except Exception:
+            # Backlog cleanup must never stop incident monitoring.
+            return False
 
     async def reconcile_backlog(self, incident_rows: list[dict[str, Any]]) -> dict[str, int]:
         """Group historical exact incidents and retire only AutoDoctor's legacy notices."""
         groups: dict[str, dict[str, Any]] = {}
         dismissed = 0
         for row in incident_rows:
-            fp = str(row.get("fingerprint") or "")
-            key = str(row.get("pattern_key") or f"fingerprint/{fp}")
-            row_first = float(row.get("first_seen") or 0)
-            row_last = float(row.get("last_seen") or 0)
-            item = groups.setdefault(
-                key,
-                {
-                    "pattern_key": key,
-                    "pattern_label": str(row.get("pattern_label") or key),
-                    "family": "unknown",
-                    "first_seen": row_first,
-                    "last_seen": row_last,
-                    "occurrences": 0,
-                    "fingerprints": 0,
-                    "representative_fingerprint": fp,
-                },
-            )
-            if row_first:
-                item["first_seen"] = min(float(item["first_seen"] or row_first), row_first)
-            if row_last >= float(item["last_seen"] or 0):
-                item["last_seen"] = row_last
-                item["representative_fingerprint"] = fp
-            item["occurrences"] += int(row.get("occurrences") or 0)
-            item["fingerprints"] += 1
-            if fp and self.notifications_enabled:
-                try:
-                    await self.ha.dismiss_notification(f"autodoctor_{fp}")
-                    dismissed += 1
-                except Exception:
-                    # Backlog cleanup must never stop incident monitoring.
-                    pass
+            fingerprint = self._aggregate_backlog_row(groups, row)
+            dismissed += int(await self._dismiss_legacy_notification(fingerprint))
 
         async with self._lock:
             await asyncio.to_thread(self._merge_backlog_sync, list(groups.values()))
@@ -436,7 +447,7 @@ class IncidentCaseManager:
         with sqlite3.connect(self.db_path) as db:
             db.row_factory = sqlite3.Row
             row = db.execute(
-                "SELECT * FROM incident_cases WHERE pattern_key = ?", (pattern_key,)
+                _CASE_BY_PATTERN_SQL, (pattern_key,)
             ).fetchone()
             return dict(row) if row else None
 

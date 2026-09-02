@@ -25,6 +25,6 @@ RUN chmod a+x /run.sh
 
 # /data is a Supervisor-managed persistent volume and the HA base runtime is S6-oriented.
 # Keep the supported root runtime explicit; do not substitute an unverified non-root user.
-USER ${APP_USER}
+USER ${APP_USER} # NOSONAR -- Home Assistant base/S6 and Supervisor-managed /data require root here.
 
 CMD ["/run.sh"]

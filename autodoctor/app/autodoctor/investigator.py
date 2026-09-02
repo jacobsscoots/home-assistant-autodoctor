@@ -47,6 +47,71 @@ class TargetedReadOnlyInvestigator:
         except Exception:
             return {"tool": tool, "available": False}
 
+    async def _collect_ha_mcp(
+        self, event: LogEvent, family: str, entities: list[str]
+    ) -> list[dict[str, Any]]:
+        reads: list[dict[str, Any]] = []
+        if self._looks_integration_or_system_failure(event):
+            reads.append(
+                await self._safe_call(
+                    "ha_get_system_health", {}, "targeted incident system health evidence"
+                )
+            )
+
+        for entity_id in entities[:3]:
+            reads.append(
+                await self._safe_call(
+                    "ha_get_state",
+                    {"entity_id": entity_id},
+                    "targeted incident entity state evidence",
+                )
+            )
+
+        if entities:
+            reads.append(
+                await self._safe_call(
+                    "ha_get_history",
+                    {"entity_ids": entities[:3], "start_time": "2h"},
+                    "targeted recent state history evidence",
+                )
+            )
+
+        automation_ids = [
+            entity.split(".", 1)[1]
+            for entity in entities
+            if entity.startswith("automation.")
+        ]
+        for automation_id in automation_ids[:2]:
+            reads.append(
+                await self._safe_call(
+                    "ha_get_automation_traces",
+                    {"automation_id": automation_id},
+                    "targeted automation trace evidence",
+                )
+            )
+
+        if family and family != "unknown":
+            reads.append(
+                await self._safe_call(
+                    "ha_get_integration",
+                    {"query": family},
+                    "targeted integration metadata evidence",
+                )
+            )
+        return reads
+
+    async def _collect_ganhammar(self, entities: list[str]) -> list[dict[str, Any]]:
+        reads: list[dict[str, Any]] = []
+        for entity_id in entities[:3]:
+            reads.append(
+                await self._safe_call(
+                    "get_state",
+                    {"entity_id": entity_id},
+                    "targeted incident entity state evidence",
+                )
+            )
+        return reads
+
     async def collect(self, event: LogEvent, family: str) -> dict[str, Any]:
         try:
             health = await self.mcp.health()
@@ -57,66 +122,13 @@ class TargetedReadOnlyInvestigator:
 
         profile = str(health.get("server_profile") or "unknown")
         entities = self.referenced_entities(event)
-        reads: list[dict[str, Any]] = []
-
         if profile == "ha-mcp":
-            if self._looks_integration_or_system_failure(event):
-                reads.append(
-                    await self._safe_call(
-                        "ha_get_system_health",
-                        {},
-                        "targeted incident system health evidence",
-                    )
-                )
-
-            for entity_id in entities[:3]:
-                reads.append(
-                    await self._safe_call(
-                        "ha_get_state",
-                        {"entity_id": entity_id},
-                        "targeted incident entity state evidence",
-                    )
-                )
-
-            if entities:
-                reads.append(
-                    await self._safe_call(
-                        "ha_get_history",
-                        {"entity_ids": entities[:3], "start_time": "2h"},
-                        "targeted recent state history evidence",
-                    )
-                )
-
-            automation_ids = [entity.split(".", 1)[1] for entity in entities if entity.startswith("automation.")]
-            for automation_id in automation_ids[:2]:
-                reads.append(
-                    await self._safe_call(
-                        "ha_get_automation_traces",
-                        {"automation_id": automation_id},
-                        "targeted automation trace evidence",
-                    )
-                )
-
-            if family and family != "unknown":
-                reads.append(
-                    await self._safe_call(
-                        "ha_get_integration",
-                        {"query": family},
-                        "targeted integration metadata evidence",
-                    )
-                )
-
+            reads = await self._collect_ha_mcp(event, family, entities)
         elif profile == "ganhammar":
-            for entity_id in entities[:3]:
-                reads.append(
-                    await self._safe_call(
-                        "get_state",
-                        {"entity_id": entity_id},
-                        "targeted incident entity state evidence",
-                    )
-                )
+            reads = await self._collect_ganhammar(entities)
+        else:
+            reads = []
 
-        # Bound the number of evidence records independently of MCP result bounding.
         return {
             "enabled": True,
             "server_profile": profile,
