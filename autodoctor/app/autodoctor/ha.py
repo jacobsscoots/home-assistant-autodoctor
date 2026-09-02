@@ -115,3 +115,15 @@ class HomeAssistantClient:
             if response.status >= 400:
                 _LOG.warning("Could not create persistent notification: HTTP %s", response.status)
 
+    async def dismiss_notification(self, notification_id: str) -> None:
+        """Dismiss one known persistent notification by ID.
+
+        Case management only passes IDs AutoDoctor itself generated. This is not a
+        general notification cleanup/listing API and does not touch other integrations.
+        """
+        payload = {"notification_id": notification_id}
+        async with self.session.post(
+            f"{self.api_base}/services/persistent_notification/dismiss", json=payload
+        ) as response:
+            if response.status >= 400:
+                _LOG.warning("Could not dismiss persistent notification: HTTP %s", response.status)
