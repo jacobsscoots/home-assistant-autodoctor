@@ -144,7 +144,8 @@ External AI context is bounded and redacted. Referenced entity IDs are replaced 
 pseudonyms before they leave Home Assistant, and `friendly_name` is excluded from external AI context.
 
 MCP result payloads receive an additional recursive sanitization/bounding pass before entering AI
-context. Known secret fields, IP addresses, email addresses and entity IDs are removed or replaced.
+context. Known secret fields, IP addresses, email addresses, entity IDs and location coordinates
+are removed or replaced.
 
 ## Feedback-loop protection
 
@@ -166,13 +167,15 @@ v0.2.0 adds optional **read-only** Home Assistant MCP enrichment using the MCP P
 Streamable HTTP transport. The SDK intentionally uses `httpx2`, not `httpx`, and AutoDoctor pins
 both dependencies in its container build.
 
-When enabled, AutoDoctor automatically refreshes only three small diagnostic reads every five
-minutes: `get_config`, `get_system_status`, and `list_integrations`. Results are cached, bounded and
-redacted before they are added to a diagnosis. The AI cannot request MCP tools itself.
+When enabled, AutoDoctor automatically refreshes only two small diagnostic reads every five
+minutes: `get_system_status` and `list_integrations`. Results are cached, bounded and redacted
+before they are added to a diagnosis. `get_config` is intentionally excluded from automatic AI
+context because upstream responses may include Home Assistant location metadata. The AI cannot
+request MCP tools itself.
 
-Every actual tool attempt is recorded without arguments/results in the rotating local
-`/data/mcp_audit.log`. Unknown tools and all non-allowlisted tools fail closed before network tool
-execution.
+Every AutoDoctor tool attempt is recorded without arguments/results in the rotating local
+`/data/mcp_audit.log`, including locally rejected attempts. Unknown tools and all non-allowlisted
+tools fail closed before network tool execution.
 
 Use a dedicated Home Assistant user/token with the least permissions compatible with the required
 reads. A token may technically retain permissions broader than AutoDoctor's local allowlist, so
