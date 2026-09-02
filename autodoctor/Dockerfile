@@ -24,7 +24,8 @@ COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 
 # /data is a Supervisor-managed persistent volume and the HA base runtime is S6-oriented.
-# Keep the supported root runtime explicit; do not substitute an unverified non-root user.
-USER ${APP_USER} # NOSONAR -- Home Assistant base/S6 and Supervisor-managed /data require root here.
+# Keep the supported root runtime explicit; the narrow platform exception is documented
+# in .sonarcloud.properties rather than encoded as invalid trailing Dockerfile syntax.
+USER ${APP_USER}
 
 CMD ["/run.sh"]
