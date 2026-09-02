@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .ai_usage_recovery import abandon_ai_usage_before_provider, mark_ai_usage_inflight
+from .case_consistency import retire_orphaned_active_case
 from .cases import IncidentCaseManager
 from .engine import AutoDoctorEngine
 from .investigator import TargetedReadOnlyInvestigator
@@ -50,6 +51,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         self.backlog_triage_runs = 0
         self.backlog_triage_analyses = 0
         self.backlog_triage_skipped = 0
+        self.backlog_triage_representative_fallbacks = 0
+        self.backlog_triage_orphaned_cases_retired = 0
         self.backlog_triage_last_run_at: float | None = None
         self.backlog_triage_last_error = ""
 
@@ -226,21 +229,53 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         )
         return eligible
 
+    @staticmethod
+    def _latest_pattern_row(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not rows:
+            return None
+        return max(
+            rows,
+            key=lambda row: (
+                float(row.get("last_seen") or 0),
+                int(row.get("occurrences") or 0),
+            ),
+        )
+
+    async def _resolve_backlog_incident(
+        self,
+        case: dict[str, Any],
+        by_fp: dict[str, dict[str, Any]],
+        by_pattern: dict[str, list[dict[str, Any]]],
+    ) -> tuple[str, dict[str, Any]] | None:
+        pattern_key = str(case.get("pattern_key") or "")
+        fp = str(case.get("representative_fingerprint") or "")
+        row = by_fp.get(fp)
+        if row is not None and str(row.get("pattern_key") or "") == pattern_key:
+            return fp, row
+
+        fallback = self._latest_pattern_row(by_pattern.get(pattern_key, []))
+        if fallback is not None:
+            self.backlog_triage_representative_fallbacks += 1
+            return str(fallback.get("fingerprint") or ""), fallback
+
+        retired = await retire_orphaned_active_case(self.store.path, pattern_key)
+        if retired:
+            self.backlog_triage_orphaned_cases_retired += 1
+            await self.cases.publish_case(pattern_key, force=True)
+        self.backlog_triage_skipped += 1
+        return None
+
     async def _triage_backlog_case(
         self,
         case: dict[str, Any],
         by_fp: dict[str, dict[str, Any]],
+        by_pattern: dict[str, list[dict[str, Any]]],
     ) -> bool:
-        fp = str(case.get("representative_fingerprint") or "")
-        row = by_fp.get(fp)
-        if not row:
-            self.backlog_triage_skipped += 1
+        resolved = await self._resolve_backlog_incident(case, by_fp, by_pattern)
+        if resolved is None:
             return False
-
+        fp, row = resolved
         pattern_key = str(case.get("pattern_key") or "")
-        if str(row.get("pattern_key") or "") != pattern_key:
-            self.backlog_triage_skipped += 1
-            return False
 
         event = self._event_from_incident_row(row)
         if not self._should_process_event(event):
@@ -273,13 +308,18 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             return 0
         incident_rows = await self.store.list_recent(self.settings.max_incidents_retained)
         by_fp = {str(row.get("fingerprint") or ""): row for row in incident_rows}
+        by_pattern: dict[str, list[dict[str, Any]]] = {}
+        for row in incident_rows:
+            key = str(row.get("pattern_key") or "")
+            if key:
+                by_pattern.setdefault(key, []).append(row)
         completed = 0
         per_cycle = max(1, int(self.settings.case_backlog_triage_max_per_cycle))
 
         for case in cases:
             if completed >= per_cycle:
                 break
-            if await self._triage_backlog_case(case, by_fp):
+            if await self._triage_backlog_case(case, by_fp, by_pattern):
                 completed += 1
                 self.backlog_triage_analyses += 1
         return completed
@@ -381,6 +421,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             "runs": self.backlog_triage_runs,
             "analyses": self.backlog_triage_analyses,
             "skipped": self.backlog_triage_skipped,
+            "representative_fallbacks": self.backlog_triage_representative_fallbacks,
+            "orphaned_cases_retired": self.backlog_triage_orphaned_cases_retired,
             "last_run_at": self.backlog_triage_last_run_at,
             "last_error": self.backlog_triage_last_error,
             "in_flight_patterns": len(self._patterns_in_analysis),
