@@ -1,10 +1,11 @@
 name: "AutoDoctor"
-version: "0.4.0"
+version: "0.4.1"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
-  cases, gathers bounded read-only diagnostics, produces conservative repair plans,
-  and can execute a tiny approval-gated deterministic repair allowlist.
+  cases, proactively triages active backlog cases within existing AI safety limits,
+  gathers bounded read-only diagnostics, produces conservative repair plans, and can
+  execute a tiny approval-gated deterministic repair allowlist.
 url: "https://github.com/jacobsscoots/home-assistant-autodoctor"
 startup: application
 boot: auto
@@ -25,6 +26,9 @@ options:
   max_ai_analyses_per_hour: 12
   max_ai_analyses_per_family_per_hour: 2
   ai_startup_backlog_grace_seconds: 300
+  case_backlog_triage_enabled: true
+  case_backlog_triage_interval_seconds: 60
+  case_backlog_triage_max_per_cycle: 1
   ai_provider: "none"
   ai_model: ""
   ai_effort: "low"
@@ -57,6 +61,9 @@ schema:
   max_ai_analyses_per_hour: "int(1,100)"
   max_ai_analyses_per_family_per_hour: "int(1,100)"
   ai_startup_backlog_grace_seconds: "int(0,3600)"
+  case_backlog_triage_enabled: bool
+  case_backlog_triage_interval_seconds: "int(30,3600)"
+  case_backlog_triage_max_per_cycle: "int(1,10)"
   ai_provider: "list(none|openai|anthropic)"
   ai_model: str
   ai_effort: "list(low|medium|high)"
