@@ -1,9 +1,10 @@
 name: "AutoDoctor"
-version: "0.4.5"
+version: "0.4.6"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
   cases, proactively triages active backlog cases within existing AI safety limits,
+  repairs stale case-to-fingerprint backlog drift without synthesizing evidence,
   recovers interrupted investigations and AI usage reservations after restart, gathers
   bounded read-only diagnostics, produces conservative repair plans, and can execute a
   tiny approval-gated deterministic repair allowlist.
