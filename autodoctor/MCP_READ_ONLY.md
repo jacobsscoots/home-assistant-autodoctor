@@ -8,11 +8,12 @@ The MCP client is fail-closed:
 
 - `mcp_enabled` defaults to `false`.
 - AutoDoctor has a compiled `READ_ONLY_TOOLS` allowlist.
-- A tool name that is not on that allowlist is rejected locally before any MCP network request is made.
+- A tool name that is not on that allowlist is rejected locally before any MCP network tool call is made.
 - Unknown future tools are denied by default.
 - The AI provider never receives a generic tool-calling interface and cannot select MCP tools.
-- Automatic v0.2.0 enrichment calls only `get_config`, `get_system_status`, and `list_integrations` every five minutes.
-- MCP results are recursively bounded, entity IDs are replaced with `<ENTITY>`, known secrets/tokens are removed, and the normal AutoDoctor redactor is applied before data enters AI context.
+- Automatic v0.2.0 enrichment calls only `get_system_status` and `list_integrations` every five minutes.
+- `get_config` is allowlisted for future deterministic local diagnostic use but is deliberately excluded from automatic AI context because upstream responses may contain Home Assistant location metadata.
+- MCP results are recursively bounded, entity IDs are replaced with `<ENTITY>`, known secrets/tokens are removed, location/latitude/longitude fields are redacted, and the normal AutoDoctor redactor is applied before data enters AI context.
 - MCP call arguments and results are deliberately omitted from the audit log.
 - MCP failures degrade to ordinary diagnosis without MCP context; they do not stop incident monitoring.
 
@@ -28,11 +29,11 @@ The v0.2.0 allowlist includes only read-oriented tools in these groups:
 - helper reads: `list_helpers`, `get_helper_config`;
 - system metadata: `get_config`, `get_system_status`, `get_domain_stats`, `get_error_log`, areas/devices/services/integrations/labels.
 
-Being allowlisted does not mean a tool is automatically called. v0.2.0 automatic prompt enrichment intentionally uses only the three small system/integration reads listed above.
+Being allowlisted does not mean a tool is automatically called. v0.2.0 automatic prompt enrichment intentionally uses only `get_system_status` and `list_integrations`.
 
 ## Audit log
 
-Every actual MCP tool attempt records a sanitized JSON line in:
+Every AutoDoctor MCP tool attempt records a sanitized JSON line in:
 
 `/data/mcp_audit.log`
 
@@ -47,7 +48,7 @@ The file rotates at 1 MB and keeps three backups. Each record contains:
 - success/failure;
 - sanitized error summary.
 
-Arguments, response payloads, tokens, and API keys are not stored in the audit log.
+Arguments, response payloads, tokens, and API keys are not stored in the audit log. Locally rejected attempts, including disabled-MCP and denylisted-tool attempts, are also auditable without opening an MCP network session.
 
 ## Configuration
 
@@ -84,8 +85,9 @@ v0.2.0 cannot intentionally:
 Before any future repair-capable phase, verify at minimum:
 
 1. enabled MCP connects successfully;
-2. only allowlisted reads appear as successful calls in `/data/mcp_audit.log`;
-3. explicit attempts to call representative write tools are denied locally with no remote tool execution;
-4. MCP result redaction does not expose tokens, raw IP addresses, email addresses, or unaliased Home Assistant entity IDs to AI context;
-5. MCP outage/timeout/auth failures do not break monitoring or AI diagnosis without MCP;
-6. Home Assistant writes, reloads, restarts, repair actions, and automation/script execution attributable to AutoDoctor remain zero.
+2. automatic successful calls are limited to `get_system_status` and `list_integrations`;
+3. only allowlisted reads can be executed through `call_readonly`;
+4. explicit attempts to call representative write tools are denied locally with no remote tool execution;
+5. MCP result redaction does not expose tokens, raw IP addresses, email addresses, unaliased Home Assistant entity IDs, or location coordinates to AI context;
+6. MCP outage/timeout/auth failures do not break monitoring or AI diagnosis without MCP;
+7. Home Assistant writes, reloads, restarts, repair actions, and automation/script execution attributable to AutoDoctor remain zero.
