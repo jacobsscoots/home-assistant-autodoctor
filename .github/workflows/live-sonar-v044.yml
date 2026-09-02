@@ -1,0 +1,32 @@
+name: Verify live Sonar v0.4.4
+
+on:
+  push:
+    branches: [diagnostic/live-sonar-v044]
+
+permissions:
+  contents: read
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query unresolved AutoDoctor issues
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+
+          params = urllib.parse.urlencode({
+              "componentKeys": "jacobsscoots_home-assistant-autodoctor",
+              "resolved": "false",
+              "ps": "100",
+          })
+          url = "https://sonarcloud.io/api/issues/search?" + params
+          with urllib.request.urlopen(url, timeout=30) as response:
+              payload = json.load(response)
+          print("UNRESOLVED_TOTAL=", payload.get("total"))
+          for issue in payload.get("issues", []):
+              print(issue.get("rule"), issue.get("component"), issue.get("line"), issue.get("message"))
+          PY
