@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from autodoctor.case_dashboard import CaseDashboard
 from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
 from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
 from autodoctor.mcp_backend import MCPBackend
+from autodoctor.repair_dashboard import RepairDashboard
+from autodoctor.repair_executor import RepairExecutor
 from autodoctor.seed_store import SeedAwareIncidentStore
 from autodoctor.transport_logging import suppress_sensitive_http_transport_logs
 
@@ -30,15 +31,20 @@ async def async_main() -> None:
     llm = build_provider(settings)
     mcp = MCPBackend(settings)
     engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
-    dashboard = CaseDashboard(settings, store, engine)
+    executor = RepairExecutor(settings, store.path, ha, mcp, engine.cases)
+    dashboard = RepairDashboard(settings, store, engine, executor)
 
     await store.initialize()
     await mcp.start()
     reconciliation = await engine.initialize_case_management()
+    await executor.initialize()
+    resumed = await executor.resume_pending_verifications()
     logging.getLogger(__name__).info(
-        "Case backlog reconciliation complete: cases=%s legacy_notifications_dismissed=%s",
+        "Case backlog reconciliation complete: cases=%s legacy_notifications_dismissed=%s; "
+        "pending_repair_verifications_resumed=%s",
         reconciliation.get("cases", 0),
         reconciliation.get("legacy_notifications_dismissed", 0),
+        resumed,
     )
     await dashboard.start()
 
@@ -46,6 +52,7 @@ async def async_main() -> None:
         await engine.run_forever()
     finally:
         await dashboard.stop()
+        await executor.close()
         await mcp.close()
         await ha.close()
         await llm.close()

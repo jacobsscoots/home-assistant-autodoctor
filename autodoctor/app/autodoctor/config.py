@@ -35,6 +35,8 @@ class Settings:
     mcp_url: str = ""
     mcp_token: str = ""
     notify_on_new_incident: bool = True
+    repair_executor_enabled: bool = False
+    repair_verification_seconds: int = 120
     auto_apply_low_risk: bool = False
 
     @classmethod

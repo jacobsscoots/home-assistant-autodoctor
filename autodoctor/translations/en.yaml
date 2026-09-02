@@ -79,7 +79,14 @@ configuration:
     name: MCP bearer token (when required)
     description: Optional for homeassistant-ai/ha-mcp secret-path endpoints. When configured it is used only for the MCP connection and never included in AI context or MCP audit records.
   notify_on_new_incident:
-    name: Notify on new incident
+    name: Notify on incident cases
+    description: Maintain one AutoDoctor persistent notification per active failure pattern instead of one notification per exact fingerprint.
+  repair_executor_enabled:
+    name: Enable approval-gated repair executor
+    description: Allows only individually approved deterministic repair types. v0.4.0 supports one exact config-entry reload after independent evidence validation; this does not enable automatic repair.
+  repair_verification_seconds:
+    name: Repair verification window
+    description: Seconds AutoDoctor waits after an approved repair before checking integration health and confirming the incident did not recur.
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Reserved for the validated executor. v0.2.2 still cannot apply changes.
+    description: Automatic repair remains disabled in v0.4.0. This setting does not bypass the human approval gate.

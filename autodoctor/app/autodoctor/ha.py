@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any, AsyncIterator
 
 import aiohttp
@@ -15,6 +16,7 @@ _LOG = logging.getLogger(__name__)
 _HA_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
 _HA_WS_TIMEOUT = aiohttp.ClientWSTimeout(ws_receive=None, ws_close=10)
 _HA_WS_HANDSHAKE_TIMEOUT_SECONDS = 15
+_CONFIG_ENTRY_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 
 class HomeAssistantClient:
@@ -127,3 +129,20 @@ class HomeAssistantClient:
         ) as response:
             if response.status >= 400:
                 _LOG.warning("Could not dismiss persistent notification: HTTP %s", response.status)
+
+    async def reload_config_entry(self, entry_id: str) -> None:
+        """Reload exactly one validated config entry.
+
+        This fixed endpoint/payload is the entire v0.4.0 repair mutation surface. There
+        is intentionally no generic Home Assistant service-call method.
+        """
+        target = str(entry_id).strip()
+        if not _CONFIG_ENTRY_ID.fullmatch(target):
+            raise ValueError("invalid config-entry identifier")
+        async with self.session.post(
+            f"{self.api_base}/services/homeassistant/reload_config_entry",
+            json={"entry_id": target},
+        ) as response:
+            if response.status >= 400:
+                _LOG.warning("Approved config-entry reload failed: HTTP %s", response.status)
+                response.raise_for_status()

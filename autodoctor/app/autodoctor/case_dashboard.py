@@ -9,7 +9,7 @@ from .dashboard import Dashboard, ingress_only
 
 
 class CaseDashboard(Dashboard):
-    """Dashboard extension for pattern-level cases and non-executable repair plans."""
+    """Dashboard extension for pattern-level cases and repair-plan visibility."""
 
     async def start(self) -> None:
         app = web.Application(middlewares=[ingress_only])
@@ -52,9 +52,8 @@ class CaseDashboard(Dashboard):
             f'<div><div class="k">Active cases</div><div class="v">{active}</div></div>'
             f'<div><div class="k">Historical cases</div><div class="v">{int(statuses.get("historical", 0))}</div></div>'
             f'<div><div class="k">Repair plans awaiting review</div><div class="v">{int(case_health.get("repair_plans_proposed", 0))}</div></div>'
-            '<div><div class="k">Repair executor</div><div class="v">OFF</div></div>'
             '</div>'
-            '<div class="card"><strong>Case management:</strong> related exact fingerprints are grouped into one notification and one repair-planning lifecycle. Repair plans are review-only in v0.3.0.</div>'
+            '<div class="card"><strong>Case management:</strong> related exact fingerprints are grouped into one notification and one repair-planning lifecycle. Execution policy is shown separately below.</div>'
         )
         text = base.text or ""
         marker = '<div class="card"><table>'
