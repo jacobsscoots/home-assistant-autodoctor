@@ -14,6 +14,9 @@ class Settings:
     max_ai_analyses_per_hour: int = 12
     max_ai_analyses_per_family_per_hour: int = 2
     ai_startup_backlog_grace_seconds: int = 300
+    case_backlog_triage_enabled: bool = True
+    case_backlog_triage_interval_seconds: int = 60
+    case_backlog_triage_max_per_cycle: int = 1
     ai_provider: str = "none"
     ai_model: str = ""
     ai_effort: str = "low"
