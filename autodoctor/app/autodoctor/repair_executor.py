@@ -73,11 +73,8 @@ class RepairExecutor:
         self._tasks.clear()
         for task in tasks:
             task.cancel()
-        for task in tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def get_plan(self, plan_id: str) -> dict[str, Any] | None:
         async with self._lock:

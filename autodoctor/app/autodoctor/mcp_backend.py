@@ -16,6 +16,8 @@ from .redact import redact
 
 _LOG = logging.getLogger(__name__)
 
+_MISSING_AUTH_ERROR = _MISSING_AUTH_ERROR
+
 _LEGACY_READ_ONLY_TOOLS = frozenset(
     {
         "get_state",
@@ -430,8 +432,8 @@ class MCPBackend:
             self._audit_local_failure(tool, purpose, "MCP is disabled")
             raise RuntimeError("MCP is disabled")
         if not self.url or self._auth_mode() == "missing":
-            self._audit_local_failure(tool, purpose, "MCP URL/authentication missing")
-            raise RuntimeError("MCP URL/authentication missing")
+            self._audit_local_failure(tool, purpose, _MISSING_AUTH_ERROR)
+            raise RuntimeError(_MISSING_AUTH_ERROR)
         try:
             http_client, client = self._session()
         except Exception as exc:
@@ -447,7 +449,7 @@ class MCPBackend:
         if not self.enabled:
             return
         if not self.url or self._auth_mode() == "missing":
-            raise RuntimeError("MCP URL/authentication missing")
+            raise RuntimeError(_MISSING_AUTH_ERROR)
         http_client, client = self._session()
         async with http_client:
             async with client:
@@ -508,10 +510,7 @@ class MCPBackend:
         if task is None:
             return
         task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        await asyncio.gather(task, return_exceptions=True)
 
     async def health(self) -> dict[str, Any]:
         if not self.enabled:

@@ -71,10 +71,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         finally:
             if triage_task is not None:
                 triage_task.cancel()
-                try:
-                    await triage_task
-                except asyncio.CancelledError:
-                    pass
+                await asyncio.gather(triage_task, return_exceptions=True)
 
     async def _claim_pattern(self, pattern_key: str) -> bool:
         async with self._analysis_claim_lock:
@@ -229,6 +226,41 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         )
         return eligible
 
+    async def _triage_backlog_case(
+        self,
+        case: dict[str, Any],
+        by_fp: dict[str, dict[str, Any]],
+    ) -> bool:
+        fp = str(case.get("representative_fingerprint") or "")
+        row = by_fp.get(fp)
+        if not row:
+            self.backlog_triage_skipped += 1
+            return False
+
+        pattern_key = str(case.get("pattern_key") or "")
+        if str(row.get("pattern_key") or "") != pattern_key:
+            self.backlog_triage_skipped += 1
+            return False
+
+        event = self._event_from_incident_row(row)
+        if not self._should_process_event(event):
+            self.backlog_triage_skipped += 1
+            return False
+
+        family = incident_family(event.name, event.source)
+        if not await self._should_analyze(event, row, family):
+            return False
+
+        return await self._analyze_persisted_incident(
+            event=event,
+            fp=fp,
+            family=family,
+            pattern_key=pattern_key,
+            pattern_label=str(case.get("pattern_label") or row.get("pattern_label") or pattern_key),
+            row=row,
+            source="backlog_triage",
+        )
+
     async def run_backlog_triage_cycle(self) -> int:
         """Analyze persisted active cases without synthesizing or re-recording log events."""
         self.backlog_triage_runs += 1
@@ -247,32 +279,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         for case in cases:
             if completed >= per_cycle:
                 break
-            fp = str(case.get("representative_fingerprint") or "")
-            row = by_fp.get(fp)
-            if not row:
-                self.backlog_triage_skipped += 1
-                continue
-            pattern_key = str(case.get("pattern_key") or "")
-            if str(row.get("pattern_key") or "") != pattern_key:
-                self.backlog_triage_skipped += 1
-                continue
-            event = self._event_from_incident_row(row)
-            if not self._should_process_event(event):
-                self.backlog_triage_skipped += 1
-                continue
-            family = incident_family(event.name, event.source)
-            if not await self._should_analyze(event, row, family):
-                continue
-            analyzed = await self._analyze_persisted_incident(
-                event=event,
-                fp=fp,
-                family=family,
-                pattern_key=pattern_key,
-                pattern_label=str(case.get("pattern_label") or row.get("pattern_label") or pattern_key),
-                row=row,
-                source="backlog_triage",
-            )
-            if analyzed:
+            if await self._triage_backlog_case(case, by_fp):
                 completed += 1
                 self.backlog_triage_analyses += 1
         return completed
