@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-from ipaddress import IPv4Address, IPv4Network, ip_address
 import logging
 import re
 from typing import Any
 
 from .models import Analysis, LogEvent
+from .private_ipv4 import normalize_rfc1918_ipv4
 
 _LOG = logging.getLogger(__name__)
 AUTO_RESOLVE_TARGET = "AUTO_RESOLVE"
 _ENTRY_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _IPV4_CANDIDATE = re.compile(r"(?<![0-9.])(?:\d{1,3}\.){3}\d{1,3}(?![0-9.])")
-_PRIVATE_IPV4_NETWORKS = (
-    IPv4Network("10.0.0.0/8"),
-    IPv4Network("172.16.0.0/12"),
-    IPv4Network("192.168.0.0/16"),
-)
 
 # Explicit logger/library -> Home Assistant integration-domain aliases. Keep this
 # deliberately tiny: an unknown library must not be guessed into an integration.
@@ -57,16 +52,8 @@ def private_rfc1918_ipv4s_for_event(event: LogEvent) -> list[str]:
     text = "\n".join((event.name, event.source, event.message, event.exception))
     found: list[str] = []
     for candidate in _IPV4_CANDIDATE.findall(text):
-        try:
-            parsed = ip_address(candidate)
-        except ValueError:
-            continue
-        if not isinstance(parsed, IPv4Address):
-            continue
-        if not any(parsed in network for network in _PRIVATE_IPV4_NETWORKS):
-            continue
-        canonical = str(parsed)
-        if canonical not in found:
+        canonical = normalize_rfc1918_ipv4(candidate)
+        if canonical is not None and canonical not in found:
             found.append(canonical)
     return found
 
