@@ -5,7 +5,11 @@ import re
 from typing import Any
 
 from .models import LogEvent
-from .private_target import entry_ids_from_value, integration_domain_for_event
+from .private_target import (
+    entry_ids_from_value,
+    integration_domain_for_event,
+    private_rfc1918_ipv4s_for_event,
+)
 
 _LOG = logging.getLogger(__name__)
 _ENTITY_RE = re.compile(r"\b(?:automation|script|scene|sensor|binary_sensor|switch|light|climate|cover|lock|alarm_control_panel|input_boolean|input_number|input_select|input_text|timer|person|device_tracker)\.[a-zA-Z0-9_]+\b")
@@ -15,12 +19,13 @@ class TargetedReadOnlyInvestigator:
     """Collect narrowly-scoped MCP evidence selected by deterministic rules.
 
     The AI never chooses these tools. Calls remain subject to MCPBackend's compiled
-    read allowlist and the live ha-mcp readOnlyHint gate. Config-entry identifiers are
-    separated into private evidence and never serialized into the AI prompt.
+    read allowlist and the live ha-mcp readOnlyHint gate. Config-entry identifiers and
+    private incident host signals are separated from AI-visible evidence.
     """
 
-    def __init__(self, mcp: Any) -> None:
+    def __init__(self, mcp: Any, ha: Any | None = None) -> None:
         self.mcp = mcp
+        self.ha = ha
 
     @staticmethod
     def referenced_entities(event: LogEvent) -> list[str]:
@@ -68,6 +73,7 @@ class TargetedReadOnlyInvestigator:
         read: dict[str, Any],
         domain: str,
         candidate_ids: set[str],
+        resolution_method: str,
     ) -> dict[str, Any]:
         if not read.get("available"):
             return {
@@ -76,6 +82,7 @@ class TargetedReadOnlyInvestigator:
                 "result": {
                     "integration_domain": domain,
                     "candidate_count": 0,
+                    "resolution_method": resolution_method,
                     "target_identifier_visibility": "private",
                 },
             }
@@ -87,6 +94,7 @@ class TargetedReadOnlyInvestigator:
                 "integration_domain": domain,
                 "candidate_count": len(candidate_ids),
                 "candidate_states": states[:20],
+                "resolution_method": resolution_method,
                 "target_identifier_visibility": "private",
             },
         }
@@ -99,6 +107,7 @@ class TargetedReadOnlyInvestigator:
         if not isinstance(result, dict):
             result = {}
         domain = str(result.get("integration_domain") or "none")[:100]
+        method = str(result.get("resolution_method") or "integration_domain")[:100]
         try:
             count = max(0, int(result.get("candidate_count") or 0))
         except (TypeError, ValueError):
@@ -106,11 +115,81 @@ class TargetedReadOnlyInvestigator:
         raw_states = result.get("candidate_states") or []
         states = [str(state)[:80] for state in raw_states if isinstance(state, str)][:20]
         _LOG.info(
-            "Private target resolution domain=%s candidates=%d states=%s",
+            "Private target resolution domain=%s candidates=%d states=%s method=%s",
             domain,
             count,
             ",".join(states) if states else "none",
+            method,
         )
+
+    async def _query_private_tplink_host(self, host: str) -> dict[str, Any]:
+        """Call the fixed HA resolver without creating a permanent second HA client."""
+
+        if self.ha is not None:
+            return await self.ha.match_tplink_config_entries_by_host(host)
+
+        # CaseAwareAutoDoctorEngine historically constructed the investigator with
+        # only MCP. Preserve that API while using the existing Supervisor credential
+        # for this fixed read-only Home Assistant command. The temporary client is
+        # always closed and does not create a generic HA command surface.
+        from .ha import HomeAssistantClient
+
+        client = HomeAssistantClient()
+        try:
+            return await client.match_tplink_config_entries_by_host(host)
+        finally:
+            await client.close()
+
+    async def _refine_tplink_candidates(
+        self,
+        event: LogEvent,
+        candidate_ids: set[str],
+    ) -> tuple[set[str], str]:
+        """Privately narrow ambiguous TP-Link entries using exact stored-host equality.
+
+        The raw IPv4 and returned config-entry identifier never enter logs or AI-safe
+        evidence. Any missing helper, malformed result, zero/multiple match, or mismatch
+        against the MCP candidate set leaves the original candidate set untouched.
+        """
+
+        if len(candidate_ids) <= 1:
+            return candidate_ids, "integration_domain"
+
+        private_hosts = private_rfc1918_ipv4s_for_event(event)
+        if len(private_hosts) != 1:
+            _LOG.info(
+                "Private target host refinement domain=tplink before=%d result=no_single_private_ipv4",
+                len(candidate_ids),
+            )
+            return candidate_ids, "integration_domain"
+
+        try:
+            result = await self._query_private_tplink_host(private_hosts[0])
+        except Exception:
+            _LOG.info(
+                "Private target host refinement domain=tplink before=%d result=unavailable",
+                len(candidate_ids),
+            )
+            return candidate_ids, "integration_domain"
+
+        matched_ids = entry_ids_from_value(result)
+        try:
+            declared_count = int(result.get("count")) if isinstance(result, dict) else -1
+        except (TypeError, ValueError):
+            declared_count = -1
+
+        if declared_count != 1 or len(matched_ids) != 1 or not matched_ids.issubset(candidate_ids):
+            _LOG.info(
+                "Private target host refinement domain=tplink before=%d result=no_unique_verified_match",
+                len(candidate_ids),
+            )
+            return candidate_ids, "integration_domain"
+
+        _LOG.info(
+            "Private target host refinement domain=tplink before=%d after=1 result=matched",
+            len(candidate_ids),
+        )
+        return matched_ids, "exact_private_host"
 
     async def _collect_ha_mcp(
         self, event: LogEvent, family: str, entities: list[str]
@@ -119,6 +198,7 @@ class TargetedReadOnlyInvestigator:
         private_target: dict[str, Any] = {
             "integration_domain": None,
             "candidates": [],
+            "resolution_method": "none",
         }
         if self._looks_integration_or_system_failure(event):
             reads.append(
@@ -171,14 +251,22 @@ class TargetedReadOnlyInvestigator:
                 if integration_read.get("available")
                 else set()
             )
+            resolution_method = "integration_domain"
+            if domain == "tplink" and candidate_ids:
+                candidate_ids, resolution_method = await self._refine_tplink_candidates(
+                    event,
+                    candidate_ids,
+                )
             private_target = {
                 "integration_domain": domain,
                 "candidates": [{"entry_id": entry_id} for entry_id in sorted(candidate_ids)],
+                "resolution_method": resolution_method,
             }
             public_evidence = self._public_integration_evidence(
                 integration_read,
                 domain,
                 candidate_ids,
+                resolution_method,
             )
             reads.append(public_evidence)
             self._log_private_target_resolution(public_evidence)
@@ -214,7 +302,11 @@ class TargetedReadOnlyInvestigator:
 
         profile = str(health.get("server_profile") or "unknown")
         entities = self.referenced_entities(event)
-        private_target: dict[str, Any] = {"integration_domain": None, "candidates": []}
+        private_target: dict[str, Any] = {
+            "integration_domain": None,
+            "candidates": [],
+            "resolution_method": "none",
+        }
         if profile == "ha-mcp":
             reads, private_target = await self._collect_ha_mcp(event, family, entities)
         elif profile == "ganhammar":
@@ -230,6 +322,7 @@ class TargetedReadOnlyInvestigator:
             "target_resolution": {
                 "integration_domain": private_target.get("integration_domain"),
                 "candidate_count": len(private_target.get("candidates") or []),
+                "resolution_method": private_target.get("resolution_method"),
                 "target_identifier_visibility": "private",
             },
             "reads": reads[:8],

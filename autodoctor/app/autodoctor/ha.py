@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 import aiohttp
 
 from .models import LogEvent
+from .private_ipv4 import normalize_rfc1918_ipv4
 
 _LOG = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ _HA_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
 _HA_WS_TIMEOUT = aiohttp.ClientWSTimeout(ws_receive=None, ws_close=10)
 _HA_WS_HANDSHAKE_TIMEOUT_SECONDS = 15
 _CONFIG_ENTRY_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+_PRIVATE_TPLINK_RESOLVER_COMMAND = "autodoctor_private_resolver/match_tplink_host"
 
 
 class HomeAssistantClient:
@@ -108,6 +110,72 @@ class HomeAssistantClient:
             response.raise_for_status()
             data = await response.json()
         return str(data.get("version") or "unknown")
+
+    async def match_tplink_config_entries_by_host(self, host: str) -> dict[str, Any]:
+        """Privately resolve an RFC1918 TP-Link host through the fixed HA WS command.
+
+        This is deliberately not a generic Home Assistant WebSocket command surface.
+        The helper command is fixed, TP-Link-only and read-only. The queried host is
+        never logged or returned by this client.
+        """
+
+        normalized = normalize_rfc1918_ipv4(host)
+        if normalized is None:
+            raise ValueError("private TP-Link resolver requires a literal RFC1918 IPv4")
+
+        async with self.session.ws_connect(
+            self.ws_url, heartbeat=30, timeout=_HA_WS_TIMEOUT
+        ) as ws:
+            hello = await self._receive_handshake_json(ws)
+            if hello.get("type") != "auth_required":
+                raise RuntimeError("unexpected Home Assistant websocket greeting")
+
+            await ws.send_json({"type": "auth", "access_token": self.token})
+            auth = await self._receive_handshake_json(ws)
+            if auth.get("type") != "auth_ok":
+                raise RuntimeError("Home Assistant websocket authentication failed")
+
+            await ws.send_json(
+                {
+                    "id": 1,
+                    "type": _PRIVATE_TPLINK_RESOLVER_COMMAND,
+                    "host": normalized,
+                }
+            )
+            response = await self._receive_handshake_json(ws)
+
+        if response.get("type") != "result" or not response.get("success"):
+            raise RuntimeError("private TP-Link resolver is unavailable or rejected the request")
+        result = response.get("result")
+        if not isinstance(result, dict) or result.get("domain") != "tplink":
+            raise RuntimeError("private TP-Link resolver returned an invalid result")
+
+        raw_matches = result.get("matches")
+        if not isinstance(raw_matches, list):
+            raise RuntimeError("private TP-Link resolver returned malformed matches")
+
+        matches: list[dict[str, str]] = []
+        for raw in raw_matches:
+            if not isinstance(raw, dict):
+                raise RuntimeError("private TP-Link resolver returned malformed match data")
+            entry_id = str(raw.get("entry_id") or "").strip()
+            if not _CONFIG_ENTRY_ID.fullmatch(entry_id):
+                raise RuntimeError("private TP-Link resolver returned an invalid config-entry identifier")
+            matches.append(
+                {
+                    "entry_id": entry_id,
+                    "state": str(raw.get("state") or "unknown")[:80],
+                }
+            )
+
+        try:
+            declared_count = int(result.get("count"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("private TP-Link resolver returned an invalid count") from exc
+        if declared_count != len(matches):
+            raise RuntimeError("private TP-Link resolver count does not match its result set")
+
+        return {"domain": "tplink", "count": len(matches), "matches": matches}
 
     async def notify(self, title: str, message: str, notification_id: str) -> None:
         payload = {"title": title, "message": message, "notification_id": notification_id}
