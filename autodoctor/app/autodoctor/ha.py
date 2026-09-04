@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from ipaddress import IPv4Address, IPv4Network, ip_address
 import json
 import logging
 import os
@@ -11,6 +10,7 @@ from typing import Any, AsyncIterator
 import aiohttp
 
 from .models import LogEvent
+from .private_ipv4 import normalize_rfc1918_ipv4
 
 _LOG = logging.getLogger(__name__)
 
@@ -18,24 +18,7 @@ _HA_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
 _HA_WS_TIMEOUT = aiohttp.ClientWSTimeout(ws_receive=None, ws_close=10)
 _HA_WS_HANDSHAKE_TIMEOUT_SECONDS = 15
 _CONFIG_ENTRY_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
-_PRIVATE_IPV4_NETWORKS = (
-    IPv4Network("10.0.0.0/8"),
-    IPv4Network("172.16.0.0/12"),
-    IPv4Network("192.168.0.0/16"),
-)
 _PRIVATE_TPLINK_RESOLVER_COMMAND = "autodoctor_private_resolver/match_tplink_host"
-
-
-def _normalize_private_ipv4(value: str) -> str | None:
-    try:
-        parsed = ip_address(str(value).strip())
-    except ValueError:
-        return None
-    if not isinstance(parsed, IPv4Address):
-        return None
-    if not any(parsed in network for network in _PRIVATE_IPV4_NETWORKS):
-        return None
-    return str(parsed)
 
 
 class HomeAssistantClient:
@@ -136,7 +119,7 @@ class HomeAssistantClient:
         never logged or returned by this client.
         """
 
-        normalized = _normalize_private_ipv4(host)
+        normalized = normalize_rfc1918_ipv4(host)
         if normalized is None:
             raise ValueError("private TP-Link resolver requires a literal RFC1918 IPv4")
 
