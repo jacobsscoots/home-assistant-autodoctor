@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -103,3 +104,19 @@ def test_private_binding_preserves_existing_risk_and_confidence_gates() -> None:
         _evidence("entry1234"),
     )
     assert low_confidence.action == "observe"
+
+
+def test_private_binding_logs_outcome_without_private_identifier(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="autodoctor.private_target")
+    analysis = _analysis()
+    assert bind_private_reload_target(analysis, _evidence("entry1234")) == "bound"
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Private target binding result=bound candidates=1" in text
+    assert "entry1234" not in text
+
+    caplog.clear()
+    rejected = _analysis(target="do-not-log-this-target")
+    bind_private_reload_target(rejected, _evidence("entry1234"))
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "do-not-log-this-target" not in text
+    assert "entry1234" not in text

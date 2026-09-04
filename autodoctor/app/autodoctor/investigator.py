@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from .models import LogEvent
 from .private_target import entry_ids_from_value, integration_domain_for_event
 
+_LOG = logging.getLogger(__name__)
 _ENTITY_RE = re.compile(r"\b(?:automation|script|scene|sensor|binary_sensor|switch|light|climate|cover|lock|alarm_control_panel|input_boolean|input_number|input_select|input_text|timer|person|device_tracker)\.[a-zA-Z0-9_]+\b")
 
 
@@ -89,6 +91,27 @@ class TargetedReadOnlyInvestigator:
             },
         }
 
+    @staticmethod
+    def _log_private_target_resolution(public_evidence: dict[str, Any]) -> None:
+        """Emit only the already-sanitized target-resolution cardinality/status."""
+
+        result = public_evidence.get("result") if isinstance(public_evidence, dict) else {}
+        if not isinstance(result, dict):
+            result = {}
+        domain = str(result.get("integration_domain") or "none")[:100]
+        try:
+            count = max(0, int(result.get("candidate_count") or 0))
+        except (TypeError, ValueError):
+            count = 0
+        raw_states = result.get("candidate_states") or []
+        states = [str(state)[:80] for state in raw_states if isinstance(state, str)][:20]
+        _LOG.info(
+            "Private target resolution domain=%s candidates=%d states=%s",
+            domain,
+            count,
+            ",".join(states) if states else "none",
+        )
+
     async def _collect_ha_mcp(
         self, event: LogEvent, family: str, entities: list[str]
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -152,7 +175,13 @@ class TargetedReadOnlyInvestigator:
                 "integration_domain": domain,
                 "candidates": [{"entry_id": entry_id} for entry_id in sorted(candidate_ids)],
             }
-            reads.append(self._public_integration_evidence(integration_read, domain, candidate_ids))
+            public_evidence = self._public_integration_evidence(
+                integration_read,
+                domain,
+                candidate_ids,
+            )
+            reads.append(public_evidence)
+            self._log_private_target_resolution(public_evidence)
 
         return reads, private_target
 

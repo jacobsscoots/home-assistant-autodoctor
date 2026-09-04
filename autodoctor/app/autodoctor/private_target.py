@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from .models import Analysis, LogEvent
 
+_LOG = logging.getLogger(__name__)
 AUTO_RESOLVE_TARGET = "AUTO_RESOLVE"
 _ENTRY_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
@@ -54,6 +56,14 @@ def entry_ids_from_value(value: Any) -> set[str]:
     return found
 
 
+def _log_binding(result: str, *, candidate_count: int | None = None) -> str:
+    if candidate_count is None:
+        _LOG.info("Private target binding result=%s", result)
+    else:
+        _LOG.info("Private target binding result=%s candidates=%d", result, candidate_count)
+    return result
+
+
 def _downgrade_private_reload(analysis: Analysis, reason: str) -> str:
     """Fail closed without creating an unexecutable repair plan."""
 
@@ -62,7 +72,7 @@ def _downgrade_private_reload(analysis: Analysis, reason: str) -> str:
     note = f"AutoDoctor private target resolver withheld repair: {reason}."
     if note not in analysis.checks:
         analysis.checks = [*analysis.checks, note][:30]
-    return reason
+    return _log_binding(reason)
 
 
 def bind_private_reload_target(analysis: Analysis, evidence: dict[str, Any]) -> str:
@@ -75,14 +85,14 @@ def bind_private_reload_target(analysis: Analysis, evidence: dict[str, Any]) -> 
     """
 
     if analysis.action != "propose_fix":
-        return "not_requested"
+        return _log_binding("not_requested")
     if len(analysis.proposed_changes) != 1:
         return _downgrade_private_reload(analysis, "repair must contain exactly one proposed change")
 
     change = analysis.proposed_changes[0]
     operation = str(change.get("operation") or change.get("action") or "").strip().lower()
     if operation not in {"reload_config_entry", "reload_integration"}:
-        return "not_reload"
+        return _log_binding("not_reload")
 
     if analysis.risk != "low":
         return _downgrade_private_reload(analysis, "only low-risk reload proposals may receive a private target")
@@ -98,12 +108,13 @@ def bind_private_reload_target(analysis: Analysis, evidence: dict[str, Any]) -> 
 
     candidates = entry_ids_from_value(evidence.get("private_target_resolution") or {})
     if len(candidates) != 1:
-        return _downgrade_private_reload(
+        reason = _downgrade_private_reload(
             analysis,
             f"expected exactly one private config-entry candidate, found {len(candidates)}",
         )
+        return reason
 
     # The identifier enters the repair plan only here, after provider output has been
     # recorded. It was not present in the AI prompt and was not chosen by the model.
     change["target"] = next(iter(candidates))
-    return "bound"
+    return _log_binding("bound", candidate_count=1)
