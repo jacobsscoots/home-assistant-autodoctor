@@ -1,0 +1,7 @@
+{
+  "domain": "autodoctor_private_resolver",
+  "name": "AutoDoctor Private Resolver",
+  "version": "0.1.0",
+  "documentation": "https://github.com/jacobsscoots/home-assistant-autodoctor/tree/main/custom_components/autodoctor_private_resolver",
+  "codeowners": ["@jacobsscoots"]
+}
