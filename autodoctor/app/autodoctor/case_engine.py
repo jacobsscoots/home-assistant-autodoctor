@@ -13,17 +13,22 @@ from .engine import AutoDoctorEngine
 from .investigator import TargetedReadOnlyInvestigator
 from .llm import NoProvider
 from .models import AIResult, LogEvent
+from .private_target import AUTO_RESOLVE_TARGET, bind_private_reload_target
 from .scheduler import incident_family
 
 _LOG = logging.getLogger(__name__)
 
-_REPAIR_PLANNING_GUIDANCE = """
+_REPAIR_PLANNING_GUIDANCE = f"""
 If action=propose_fix, proposed_changes must be a list of structured proposal objects.
 Each proposal should use these keys when applicable: operation, target, reason,
-expected_result, rollback, preconditions. Do not invent a target identifier. If the
-exact target is not present in the supplied evidence, use operation=manual_review and
-explain what must be discovered first. A proposal is NOT approval and has NOT been
-executed. Never instruct AutoDoctor to bypass its read-only MCP boundary.
+expected_result, rollback, preconditions. Config-entry identifiers are private and are
+never supplied to you. If target_resolution.candidate_count is exactly 1 and the
+evidence independently justifies a low-risk config-entry reload, propose exactly one
+change with operation=reload_config_entry and target={AUTO_RESOLVE_TARGET}. AutoDoctor
+will bind the real target only after your response. If candidate_count is 0 or greater
+than 1, do not propose a config-entry reload. Never invent or echo an identifier. A
+proposal is NOT approval and has NOT been executed. Never instruct AutoDoctor to
+bypass its read-only MCP boundary.
 """.strip()
 
 _TRIAGE_CASE_STATUSES = {"new", "reopened"}
@@ -53,6 +58,9 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         self.backlog_triage_skipped = 0
         self.backlog_triage_representative_fallbacks = 0
         self.backlog_triage_orphaned_cases_retired = 0
+        self.private_target_bindings = 0
+        self.private_target_withheld = 0
+        self.private_target_last_result = ""
         self.backlog_triage_last_run_at: float | None = None
         self.backlog_triage_last_error = ""
 
@@ -142,11 +150,11 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
                 pattern_label=pattern_label,
                 row=row,
             )
-            targeted = await self.investigator.collect(event, family)
+            targeted_ai, targeted_private = await self.investigator.collect_split(event, family)
             prompt += (
                 "\n\nTargeted read-only MCP evidence selected deterministically by AutoDoctor "
-                "(the AI did not choose these tools):\n"
-                + json.dumps(targeted, ensure_ascii=False, indent=2)
+                "(the AI did not choose these tools; private target identifiers are withheld):\n"
+                + json.dumps(targeted_ai, ensure_ascii=False, indent=2)
                 + "\n\nRepair-planning contract:\n"
                 + _REPAIR_PLANNING_GUIDANCE
             )
@@ -155,7 +163,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
                 return False
 
             usage_id, budget_reservation = reservation
-            self._targeted_evidence[fp] = targeted
+            self._targeted_evidence[fp] = targeted_private
             self._analysis_patterns[fp] = pattern_key
             await self.cases.mark_investigating(pattern_key)
             _LOG.info(
@@ -349,6 +357,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         pattern_label: str,
         row: dict[str, Any],
     ) -> None:
+        # Save provider output/usage before any private identifier is bound. The raw
+        # incident analysis therefore never contains the config-entry ID.
         await super()._handle_success(
             result,
             usage_id=usage_id,
@@ -361,6 +371,12 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         )
         evidence = self._targeted_evidence.pop(fp, {})
         self._analysis_patterns.pop(fp, None)
+        binding = bind_private_reload_target(result.analysis, evidence)
+        self.private_target_last_result = binding
+        if binding == "bound":
+            self.private_target_bindings += 1
+        elif binding not in {"not_requested", "not_reload"}:
+            self.private_target_withheld += 1
         await self.cases.apply_analysis(
             pattern_key=pattern_key,
             fingerprint=fp,
@@ -412,6 +428,13 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         )
         case_health["notification_mode"] = "pattern-case"
         case_health["backlog_reconciliation"] = dict(self.backlog_reconciliation)
+        case_health["private_target_resolution"] = {
+            "mode": "post-ai-deterministic",
+            "identifiers_exposed_to_ai": False,
+            "bindings": self.private_target_bindings,
+            "withheld": self.private_target_withheld,
+            "last_result": self.private_target_last_result,
+        }
         case_health["backlog_triage"] = {
             "enabled": bool(self.settings.case_backlog_triage_enabled and not isinstance(self.llm, NoProvider)),
             "eligible_case_statuses": sorted(_TRIAGE_CASE_STATUSES),
