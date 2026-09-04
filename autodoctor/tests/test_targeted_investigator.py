@@ -43,8 +43,79 @@ def test_investigator_selects_state_history_trace_and_health_without_ai_choice()
         assert "ha_get_history" in tools
         assert "ha_get_automation_traces" in tools
         assert "ha_get_integration" in tools
+        integration_call = next(call for call in mcp.calls if call[0] == "ha_get_integration")
+        assert integration_call[1] == {"domain": "automation"}
         assert result["selection"] == "deterministic-by-incident"
         assert len(result["reads"]) <= 8
+
+    asyncio.run(run())
+
+
+def test_kasa_uses_tplink_domain_and_keeps_entry_id_private() -> None:
+    class KasaMCP(FakeMCP):
+        async def call_readonly(self, tool, arguments=None, *, purpose=""):
+            self.calls.append((tool, dict(arguments or {}), purpose))
+            if tool == "ha_get_integration":
+                return {
+                    "total_count": 1,
+                    "entries": [
+                        {
+                            "entry_id": "entry1234",
+                            "domain": "tplink",
+                            "title": "Private plug title",
+                            "state": "loaded",
+                        }
+                    ],
+                    "state_summary": {"loaded": 1},
+                }
+            return {"ok": True, "tool": tool}
+
+    async def run() -> None:
+        mcp = KasaMCP()
+        investigator = TargetedReadOnlyInvestigator(mcp)
+        event = LogEvent(
+            level="ERROR",
+            source="kasa.transports.klaptransport",
+            exception="",
+            message="query failed after authentication",
+            name="kasa.transports.klaptransport",
+            timestamp=1.0,
+        )
+        ai_evidence, private_evidence = await investigator.collect_split(event, "kasa")
+
+        integration_call = next(call for call in mcp.calls if call[0] == "ha_get_integration")
+        assert integration_call[1] == {"domain": "tplink"}
+        assert ai_evidence["target_resolution"]["integration_domain"] == "tplink"
+        assert ai_evidence["target_resolution"]["candidate_count"] == 1
+        assert ai_evidence["target_resolution"]["target_identifier_visibility"] == "private"
+
+        serialized_ai = str(ai_evidence)
+        assert "entry1234" not in serialized_ai
+        assert "Private plug title" not in serialized_ai
+        assert private_evidence["private_target_resolution"]["candidates"] == [
+            {"entry_id": "entry1234"}
+        ]
+
+    asyncio.run(run())
+
+
+def test_unknown_library_does_not_fall_back_to_fuzzy_integration_search() -> None:
+    async def run() -> None:
+        mcp = FakeMCP()
+        investigator = TargetedReadOnlyInvestigator(mcp)
+        event = LogEvent(
+            level="ERROR",
+            source="aiohttp.client",
+            exception="",
+            message="connection failed",
+            name="aiohttp.client",
+            timestamp=1.0,
+        )
+        ai_evidence, private_evidence = await investigator.collect_split(event, "aiohttp")
+        assert all(tool != "ha_get_integration" for tool, _args, _purpose in mcp.calls)
+        assert ai_evidence["target_resolution"]["integration_domain"] is None
+        assert ai_evidence["target_resolution"]["candidate_count"] == 0
+        assert private_evidence["private_target_resolution"]["candidates"] == []
 
     asyncio.run(run())
 
