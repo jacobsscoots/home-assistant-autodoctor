@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
@@ -97,6 +98,45 @@ def test_kasa_uses_tplink_domain_and_keeps_entry_id_private() -> None:
         ]
 
     asyncio.run(run())
+
+
+def test_private_target_resolution_log_exposes_only_safe_cardinality_and_state(caplog) -> None:
+    class KasaMCP(FakeMCP):
+        async def call_readonly(self, tool, arguments=None, *, purpose=""):
+            self.calls.append((tool, dict(arguments or {}), purpose))
+            if tool == "ha_get_integration":
+                return {
+                    "entries": [
+                        {
+                            "entry_id": "entry1234",
+                            "title": "Never log this private title",
+                            "domain": "tplink",
+                            "state": "loaded",
+                        }
+                    ]
+                }
+            return {"ok": True, "tool": tool}
+
+    async def run() -> None:
+        caplog.set_level(logging.INFO, logger="autodoctor.investigator")
+        investigator = TargetedReadOnlyInvestigator(KasaMCP())
+        await investigator.collect_split(
+            LogEvent(
+                level="ERROR",
+                source="kasa.transports.klaptransport",
+                exception="",
+                message="authentication failed",
+                name="kasa.transports.klaptransport",
+                timestamp=1.0,
+            ),
+            "kasa",
+        )
+
+    asyncio.run(run())
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Private target resolution domain=tplink candidates=1 states=loaded" in text
+    assert "entry1234" not in text
+    assert "Never log this private title" not in text
 
 
 def test_unknown_library_does_not_fall_back_to_fuzzy_integration_search() -> None:
