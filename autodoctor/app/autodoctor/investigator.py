@@ -122,6 +122,24 @@ class TargetedReadOnlyInvestigator:
             method,
         )
 
+    async def _query_private_tplink_host(self, host: str) -> dict[str, Any]:
+        """Call the fixed HA resolver without creating a permanent second HA client."""
+
+        if self.ha is not None:
+            return await self.ha.match_tplink_config_entries_by_host(host)
+
+        # CaseAwareAutoDoctorEngine historically constructed the investigator with
+        # only MCP. Preserve that API while using the existing Supervisor credential
+        # for this fixed read-only Home Assistant command. The temporary client is
+        # always closed and does not create a generic HA command surface.
+        from .ha import HomeAssistantClient
+
+        client = HomeAssistantClient()
+        try:
+            return await client.match_tplink_config_entries_by_host(host)
+        finally:
+            await client.close()
+
     async def _refine_tplink_candidates(
         self,
         event: LogEvent,
@@ -134,7 +152,7 @@ class TargetedReadOnlyInvestigator:
         against the MCP candidate set leaves the original candidate set untouched.
         """
 
-        if self.ha is None or len(candidate_ids) <= 1:
+        if len(candidate_ids) <= 1:
             return candidate_ids, "integration_domain"
 
         private_hosts = private_rfc1918_ipv4s_for_event(event)
@@ -146,7 +164,7 @@ class TargetedReadOnlyInvestigator:
             return candidate_ids, "integration_domain"
 
         try:
-            result = await self.ha.match_tplink_config_entries_by_host(private_hosts[0])
+            result = await self._query_private_tplink_host(private_hosts[0])
         except Exception:
             _LOG.info(
                 "Private target host refinement domain=tplink before=%d result=unavailable",
