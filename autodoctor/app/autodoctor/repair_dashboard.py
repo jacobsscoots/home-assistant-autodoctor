@@ -25,6 +25,7 @@ class RepairDashboard(CaseDashboard):
         app.router.add_get("/api/cases", self.cases)
         app.router.add_get("/api/repair-plans", self.repair_plans)
         app.router.add_get("/api/repair-executor", self.repair_executor_health)
+        app.router.add_post("/api/cases/resolve", self.resolve_case)
         app.router.add_post("/api/repair-plans/{plan_id}/approve", self.approve_plan)
         app.router.add_post("/api/repair-plans/{plan_id}/reject", self.reject_plan)
         self.runner = web.AppRunner(app)
@@ -40,24 +41,60 @@ class RepairDashboard(CaseDashboard):
     async def repair_executor_health(self, request: web.Request) -> web.Response:
         return web.json_response(await self.executor.health())
 
-    async def _submitted_nonce(self, request: web.Request) -> str:
+    async def _submitted_payload(self, request: web.Request) -> dict[str, Any]:
         if request.content_type == "application/json":
             try:
                 payload = await request.json()
             except Exception:
-                return ""
-            return str(payload.get("approval_nonce") or "") if isinstance(payload, dict) else ""
+                return {}
+            return payload if isinstance(payload, dict) else {}
         data = await request.post()
-        return str(data.get("approval_nonce") or "")
+        return {str(key): value for key, value in data.items()}
 
-    async def _require_approval_nonce(self, request: web.Request) -> None:
-        submitted = await self._submitted_nonce(request)
+    async def _submitted_nonce(self, request: web.Request) -> str:
+        payload = await self._submitted_payload(request)
+        return str(payload.get("approval_nonce") or "")
+
+    def _require_nonce_value(self, submitted: str) -> None:
         if not submitted or not secrets.compare_digest(submitted, self.executor.approval_nonce):
             raise web.HTTPForbidden(text="Invalid or expired repair approval token.")
+
+    async def _require_approval_nonce(self, request: web.Request) -> None:
+        self._require_nonce_value(await self._submitted_nonce(request))
 
     @staticmethod
     def _redirect_home() -> web.Response:
         raise web.HTTPSeeOther(location="./")
+
+    async def resolve_case(self, request: web.Request) -> web.Response:
+        """Mark a non-executing case resolved and dismiss only its AutoDoctor notice.
+
+        This is deliberately not a Home Assistant repair action. It changes AutoDoctor's
+        local case lifecycle only; a future recurrence automatically reopens the case.
+        Cases with a repair awaiting approval, an active investigation, or verification
+        cannot be hidden through this endpoint.
+        """
+
+        payload = await self._submitted_payload(request)
+        self._require_nonce_value(str(payload.get("approval_nonce") or ""))
+        pattern_key = str(payload.get("pattern_key") or "").strip()
+        if not pattern_key:
+            raise web.HTTPBadRequest(text="A case pattern key is required.")
+
+        case = await self.engine.cases.get_case(pattern_key)
+        if case is None:
+            raise web.HTTPNotFound(text="Case not found.")
+        status = str(case.get("status") or "")
+        if status in {"investigating", "repair_available", "verifying"}:
+            raise web.HTTPConflict(
+                text="This case is actively investigating, awaiting repair approval, or verifying and cannot be manually resolved."
+            )
+        if status not in {"resolved", "historical", "suppressed_nonfatal"}:
+            await self.engine.cases.mark_resolved(
+                pattern_key,
+                verification="Marked resolved by the user from the Home Assistant ingress dashboard.",
+            )
+        return self._redirect_home()
 
     async def approve_plan(self, request: web.Request) -> web.Response:
         if not self.executor.enabled:
