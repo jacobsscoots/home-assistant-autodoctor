@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from ipaddress import IPv4Address, ip_address
 from typing import Any
 
@@ -36,7 +37,11 @@ def normalize_private_ipv4(value: Any) -> str | None:
 def entry_data_matches_host(entry_data: Any, expected_host: str) -> bool:
     """Match only ConfigEntry.data['host'] by exact normalized RFC1918 equality."""
 
-    if not isinstance(entry_data, dict):
+    # Home Assistant exposes ConfigEntry.data as a read-only Mapping, commonly a
+    # MappingProxyType. Requiring a concrete dict makes production entries look empty
+    # even though test fixtures using dict work, so accept the abstract read-only
+    # mapping contract instead.
+    if not isinstance(entry_data, Mapping):
         return False
     expected = normalize_private_ipv4(expected_host)
     if expected is None:

@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.4.9"
+version: "0.4.10"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
@@ -7,10 +7,12 @@ description: >-
   repairs stale case-to-fingerprint backlog drift without synthesizing evidence,
   resolves supported integration targets privately without exposing config-entry IDs
   to the AI, can narrow ambiguous TP-Link targets by an exact private RFC1918 host
-  bridge, logs privacy-safe target cardinality and binding outcomes for verification,
-  recovers interrupted investigations and AI usage reservations after restart, gathers
-  bounded read-only diagnostics, produces conservative repair plans, and can execute a
-  tiny approval-gated deterministic repair allowlist.
+  bridge, retains proven non-fatal Kasa polling noise as evidence without spending AI
+  budget or creating repair targets, keeps persistent notifications aligned to active
+  case lifecycle, provides a responsive ingress control dashboard, recovers interrupted
+  investigations and AI usage reservations after restart, gathers bounded read-only
+  diagnostics, produces conservative repair plans, and can execute a tiny approval-gated
+  deterministic repair allowlist.
 url: "https://github.com/jacobsscoots/home-assistant-autodoctor"
 startup: application
 boot: auto

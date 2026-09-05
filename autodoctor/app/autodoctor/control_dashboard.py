@@ -5,14 +5,17 @@ from typing import Any
 
 from aiohttp import web
 
+from .dashboard_ui import render_dashboard
 from .repair_dashboard import RepairDashboard
 
 
 class ControlDashboard(RepairDashboard):
-    """v0.4.x dashboard polish without changing any execution policy."""
+    """Home Assistant ingress control surface with current safety/lifecycle state."""
 
     @staticmethod
     def _triage_card(health: dict[str, Any]) -> str:
+        """Keep the compact triage fragment for tests and backwards-compatible callers."""
+
         case_health = health.get("case_management") or {}
         triage = case_health.get("backlog_triage") or {}
         statuses = case_health.get("cases_by_status") or {}
@@ -41,29 +44,27 @@ class ControlDashboard(RepairDashboard):
         )
 
     async def index(self, request: web.Request) -> web.Response:
-        base = await super().index(request)
-        text = base.text or ""
-        text = text.replace(
-            '<div class="k">Open incidents</div>',
-            '<div class="k">Open incident fingerprints</div>',
-            1,
-        )
-        old_safety = (
-            '<strong>Safety:</strong> v0.2.1 supports explicit read-only MCP profiles, including the existing '
-            'ha-mcp add-on. Unknown/write tools remain fail-closed and the repair executor remains disabled.'
-        )
-        new_safety = (
-            '<strong>Safety:</strong> MCP diagnostic access is read-only and fail-closed. The repair executor, '
-            'when enabled, supports only the deterministic repair allowlist and requires individual ingress '
-            'approval. Automatic repairs remain disabled.'
-        )
-        text = text.replace(old_safety, new_safety, 1)
-
         health = await self.engine.health()
-        triage = self._triage_card(health)
-        marker = '<div class="card"><table>'
-        if marker in text:
-            text = text.replace(marker, triage + '<h2>Exact incident evidence</h2>' + marker, 1)
-        else:
-            text += triage
-        return web.Response(text=text, content_type="text/html")
+        incidents = await self.store.list_recent(50)
+        cases = await self.engine.cases.list_cases(200)
+        plans = await self.engine.cases.list_repair_plans(100)
+        executor_health = await self.executor.health()
+        body = render_dashboard(
+            health=health,
+            incidents=incidents,
+            cases=cases,
+            plans=plans,
+            executor_health=executor_health,
+            executor=self.executor,
+            approval_nonce=self.executor.approval_nonce,
+        )
+        return web.Response(
+            text=body,
+            content_type="text/html",
+            headers={
+                "Cache-Control": "no-store",
+                "Pragma": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+            },
+        )

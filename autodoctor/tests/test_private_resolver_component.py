@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import MappingProxyType
 
 ROOT = Path(__file__).resolve().parents[2]
 MATCH_PATH = ROOT / "custom_components" / "autodoctor_private_resolver" / "match.py"
@@ -47,6 +48,18 @@ def test_entry_data_match_is_exact_host_only() -> None:
     assert entry_data_matches_host({"title": "192.168.1.25"}, "192.168.1.25") is False
     assert entry_data_matches_host({"host": "8.8.8.8"}, "8.8.8.8") is False
     assert entry_data_matches_host(None, "192.168.1.25") is False
+
+
+def test_entry_data_match_accepts_home_assistant_read_only_mapping() -> None:
+    entry = MappingProxyType(
+        {
+            "host": "192.168.1.25",
+            "username": "private-user",
+            "password": "private-password",
+        }
+    )
+    assert entry_data_matches_host(entry, "192.168.1.25") is True
+    assert entry_data_matches_host(entry, "192.168.1.26") is False
 
 
 def test_websocket_component_remains_read_only_and_tplink_scoped() -> None:
