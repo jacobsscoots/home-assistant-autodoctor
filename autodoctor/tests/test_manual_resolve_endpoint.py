@@ -41,15 +41,17 @@ def _dashboard(status: str) -> RepairDashboard:
     return dashboard
 
 
-def test_manual_resolve_allows_safe_nonexecuting_case() -> None:
+def test_manual_resolve_allows_safe_nonexecuting_case_and_returns_to_ingress_root() -> None:
     async def run() -> None:
         dashboard = _dashboard("diagnosed")
         request = FakeRequest({"approval_nonce": "nonce", "pattern_key": "demo/x"})
         try:
             await dashboard.resolve_case(request)  # type: ignore[arg-type]
         except Exception as exc:
-            # Successful form handling ends in HTTPSeeOther.
             assert getattr(exc, "status", None) == 303
+            assert exc.headers.get("Location") == "../../"
+        else:
+            raise AssertionError("successful form handling should redirect")
         assert dashboard.engine.cases.resolved == ["demo/x"]
 
     asyncio.run(run())
