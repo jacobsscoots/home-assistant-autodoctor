@@ -43,6 +43,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         self.notification_dismiss_failures = 0
         self.quiet_cases_retired = 0
         self.nonfatal_cases_suppressed = 0
+        self._inactive_notification_reconciliations = 0
 
     async def reconcile_backlog(
         self,
@@ -126,11 +127,15 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
     async def reconcile_inactive_notifications(self, *, force: bool = False) -> int:
         """Dismiss stale AutoDoctor notices owned by inactive cases.
 
-        ``force`` is reserved for the one startup reconciliation pass so a notification
-        created immediately before a previous process crash is still cleaned up even if
-        its local sent-marker was never committed.
+        The first reconciliation after process start is always forced. This closes the
+        crash window where Home Assistant accepted a case notification but AutoDoctor
+        stopped before persisting ``last_notification_at``. Later maintenance passes
+        use the marker and therefore do not repeatedly dismiss already-clean notices.
         """
 
+        startup_force = self._inactive_notification_reconciliations == 0
+        self._inactive_notification_reconciliations += 1
+        effective_force = bool(force or startup_force)
         dismissed = 0
         for case in await self.list_cases(500):
             if str(case.get("status") or "") not in _INACTIVE_NOTIFICATION_STATUSES:
@@ -139,7 +144,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
                 await self._dismiss_owned_notification(
                     str(case.get("pattern_key") or ""),
                     case,
-                    force=force,
+                    force=effective_force,
                 )
             )
         return dismissed
