@@ -12,7 +12,14 @@ from autodoctor.nonfatal import nonfatal_observation_reason
 
 def _reason(source: str):
     return nonfatal_observation_reason(
-        LogEvent("ERROR", "kasa.protocol", source, "failure", "", 1.0),
+        LogEvent(
+            level="ERROR",
+            source=source,
+            exception="",
+            message="failure",
+            name="kasa.protocol",
+            timestamp=1.0,
+        ),
         "kasa",
     )
 
