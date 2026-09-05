@@ -80,11 +80,25 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         self,
         pattern_key: str,
         case: dict[str, Any] | None = None,
+        *,
+        force: bool = False,
     ) -> bool:
+        """Dismiss one deterministic AutoDoctor case notice.
+
+        Normal lifecycle paths use the durable ``last_notification_at`` marker so a
+        successfully dismissed notice is not called repeatedly. Startup reconciliation
+        may set ``force=True`` once to close the tiny crash window where Home Assistant
+        accepted notification creation but the process stopped before persisting that
+        marker. The ID is still taken only from AutoDoctor's own case row and must be in
+        the AutoDoctor namespace.
+        """
+
         if not self.notifications_enabled:
             return False
         current = case or await self.get_case(pattern_key)
-        if not current or current.get("last_notification_at") is None:
+        if not current:
+            return False
+        if not force and current.get("last_notification_at") is None:
             return False
         notification_id = str(current.get("notification_id") or "")
         if not notification_id.startswith("autodoctor_case_"):
@@ -109,15 +123,24 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
             )
             db.commit()
 
-    async def reconcile_inactive_notifications(self) -> int:
-        """Dismiss any stale AutoDoctor notice still owned by an inactive case."""
+    async def reconcile_inactive_notifications(self, *, force: bool = False) -> int:
+        """Dismiss stale AutoDoctor notices owned by inactive cases.
+
+        ``force`` is reserved for the one startup reconciliation pass so a notification
+        created immediately before a previous process crash is still cleaned up even if
+        its local sent-marker was never committed.
+        """
 
         dismissed = 0
         for case in await self.list_cases(500):
             if str(case.get("status") or "") not in _INACTIVE_NOTIFICATION_STATUSES:
                 continue
             dismissed += int(
-                await self._dismiss_owned_notification(str(case.get("pattern_key") or ""), case)
+                await self._dismiss_owned_notification(
+                    str(case.get("pattern_key") or ""),
+                    case,
+                    force=force,
+                )
             )
         return dismissed
 
