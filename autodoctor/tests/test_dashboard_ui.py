@@ -143,7 +143,7 @@ def test_manual_resolve_is_offered_only_for_safe_nonexecuting_statuses() -> None
         executor=FakeExecutor(),
         approval_nonce="nonce-value",
     )
-    assert text.count("Mark resolved &amp; dismiss") == 1
+    assert text.count("Mark resolved & dismiss") == 1
     assert 'value="safe/diagnosed/x"' in text
     assert 'value="unsafe/repair/x"' not in text
     assert 'value="unsafe/investigating/x"' not in text
