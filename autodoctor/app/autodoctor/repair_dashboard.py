@@ -63,8 +63,12 @@ class RepairDashboard(CaseDashboard):
         self._require_nonce_value(await self._submitted_nonce(request))
 
     @staticmethod
-    def _redirect_home() -> web.Response:
-        raise web.HTTPSeeOther(location="./")
+    def _redirect_home(levels: int) -> web.Response:
+        """Return to the ingress root without escaping Home Assistant's ingress prefix."""
+
+        if levels < 1:
+            raise ValueError("redirect levels must be positive")
+        raise web.HTTPSeeOther(location="../" * levels)
 
     async def resolve_case(self, request: web.Request) -> web.Response:
         """Mark a non-executing case resolved and dismiss only its AutoDoctor notice.
@@ -94,7 +98,7 @@ class RepairDashboard(CaseDashboard):
                 pattern_key,
                 verification="Marked resolved by the user from the Home Assistant ingress dashboard.",
             )
-        return self._redirect_home()
+        return self._redirect_home(2)
 
     async def approve_plan(self, request: web.Request) -> web.Response:
         if not self.executor.enabled:
@@ -109,7 +113,7 @@ class RepairDashboard(CaseDashboard):
             raise web.HTTPConflict(text=str(exc)) from exc
         except RuntimeError as exc:
             raise web.HTTPInternalServerError(text=str(exc)) from exc
-        return self._redirect_home()
+        return self._redirect_home(3)
 
     async def reject_plan(self, request: web.Request) -> web.Response:
         await self._require_approval_nonce(request)
@@ -120,7 +124,7 @@ class RepairDashboard(CaseDashboard):
             raise web.HTTPNotFound(text=str(exc)) from exc
         except ValueError as exc:
             raise web.HTTPConflict(text=str(exc)) from exc
-        return self._redirect_home()
+        return self._redirect_home(3)
 
     @staticmethod
     def _plan_summary(plan: dict[str, Any]) -> str:
