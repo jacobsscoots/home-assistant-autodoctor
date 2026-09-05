@@ -87,7 +87,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         suppressed = await self._reconcile_nonfatal_cases(rows)
         self.nonfatal_cases_suppressed_startup += suppressed
         quiet_retired = await self.cases.retire_quiet_cases()
-        inactive_dismissed = await self.cases.reconcile_inactive_notifications()
+        inactive_dismissed = await self.cases.reconcile_inactive_notifications(force=True)
         active_published = await self.cases.publish_active_cases(force=True)
         self.backlog_reconciliation.update(
             {
@@ -154,6 +154,20 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         async with self._analysis_claim_lock:
             self._patterns_in_analysis.discard(pattern_key)
 
+    async def _ensure_nonfatal_suppressed(self, pattern_key: str, reason: str) -> bool:
+        """Return True when a matching observation is safely in suppressed state.
+
+        `mark_suppressed_nonfatal` returns False when another event already put the
+        case into `suppressed_nonfatal`. Re-read the case before deciding to reopen it,
+        so repeated matching Kasa observations remain evidence-only and never fall
+        through to notification or AI work.
+        """
+
+        if await self.cases.mark_suppressed_nonfatal(pattern_key, reason):
+            return True
+        current = await self.cases.get_case(pattern_key)
+        return bool(current and str(current.get("status") or "") == "suppressed_nonfatal")
+
     async def handle_event(self, event: LogEvent) -> None:
         if not self._should_process_event(event):
             return
@@ -171,7 +185,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         await self._record_memory_feedback(fp, row, event, is_new)
 
         reason = nonfatal_observation_reason(event, family)
-        if reason and await self.cases.mark_suppressed_nonfatal(pattern_key, reason):
+        if reason and await self._ensure_nonfatal_suppressed(pattern_key, reason):
             self.nonfatal_events_suppressed += 1
             _LOG.info(
                 "Suppressed non-fatal case analysis pattern=%s family=%s; evidence retained",
@@ -366,7 +380,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
 
         family = incident_family(event.name, event.source)
         reason = nonfatal_observation_reason(event, family)
-        if reason and await self.cases.mark_suppressed_nonfatal(pattern_key, reason):
+        if reason and await self._ensure_nonfatal_suppressed(pattern_key, reason):
             self.backlog_triage_skipped += 1
             return False
         if await self.cases.reopen_if_suppressed(pattern_key):
