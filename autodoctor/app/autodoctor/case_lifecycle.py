@@ -127,7 +127,8 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         case = await self.get_case(pattern_key)
         if not case:
             return False
-        if str(case.get("status") or "") in _SUPPRESSION_PROTECTED_STATUSES:
+        status = str(case.get("status") or "")
+        if status == "suppressed_nonfatal" or status in _SUPPRESSION_PROTECTED_STATUSES:
             return False
         async with self._lock:
             changed = await asyncio.to_thread(
@@ -143,11 +144,14 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
 
     def _mark_suppressed_nonfatal_sync(self, pattern_key: str, reason: str) -> bool:
         with sqlite3.connect(self.db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT status FROM incident_cases WHERE pattern_key = ?",
                 (pattern_key,),
             ).fetchone()
-            if not row or str(row[0] or "") in _SUPPRESSION_PROTECTED_STATUSES:
+            status = str(row[0] or "") if row else ""
+            if not row or status == "suppressed_nonfatal" or status in _SUPPRESSION_PROTECTED_STATUSES:
+                db.rollback()
                 return False
             db.execute(
                 """UPDATE incident_cases
@@ -221,16 +225,20 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
 
     def _retire_quiet_cases_sync(self, cutoff: float, now: float) -> list[str]:
         with sqlite3.connect(self.db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
             keys = self._quiet_case_rows(db, cutoff)
+            retired: list[str] = []
             for pattern_key in keys:
-                db.execute(
+                cursor = db.execute(
                     """UPDATE incident_cases
                     SET status = 'historical', updated_at = ?
                     WHERE pattern_key = ? AND status IN ('new', 'diagnosed', 'reopened')""",
                     (now, pattern_key),
                 )
+                if cursor.rowcount == 1:
+                    retired.append(pattern_key)
             db.commit()
-            return keys
+            return retired
 
     async def mark_resolved(self, pattern_key: str, *, verification: str = "") -> None:
         case = await self.get_case(pattern_key)
