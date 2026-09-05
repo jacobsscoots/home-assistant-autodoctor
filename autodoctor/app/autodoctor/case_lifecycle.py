@@ -25,7 +25,6 @@ _SUPPRESSION_PROTECTED_STATUSES = {
     "needs_user_action",
     "verifying",
 }
-_QUIET_RETIRE_STATUSES = {"new", "diagnosed", "reopened"}
 _DEFAULT_QUIET_RETIRE_SECONDS = 24 * 3600
 
 
@@ -211,22 +210,26 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         self.quiet_cases_retired += len(retired)
         return len(retired)
 
+    @staticmethod
+    def _quiet_case_rows(db: sqlite3.Connection, cutoff: float) -> list[str]:
+        rows = db.execute(
+            """SELECT pattern_key FROM incident_cases
+            WHERE status IN ('new', 'diagnosed', 'reopened') AND last_seen < ?""",
+            (cutoff,),
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def _retire_quiet_cases_sync(self, cutoff: float, now: float) -> list[str]:
-        placeholders = ",".join("?" for _ in _QUIET_RETIRE_STATUSES)
-        statuses = sorted(_QUIET_RETIRE_STATUSES)
         with sqlite3.connect(self.db_path) as db:
-            rows = db.execute(
-                f"SELECT pattern_key FROM incident_cases WHERE status IN ({placeholders}) AND last_seen < ?",  # noqa: S608
-                (*statuses, cutoff),
-            ).fetchall()
-            keys = [str(row[0]) for row in rows]
-            if keys:
-                key_placeholders = ",".join("?" for _ in keys)
+            keys = self._quiet_case_rows(db, cutoff)
+            for pattern_key in keys:
                 db.execute(
-                    f"UPDATE incident_cases SET status = 'historical', updated_at = ? WHERE pattern_key IN ({key_placeholders})",  # noqa: S608
-                    (now, *keys),
+                    """UPDATE incident_cases
+                    SET status = 'historical', updated_at = ?
+                    WHERE pattern_key = ? AND status IN ('new', 'diagnosed', 'reopened')""",
+                    (now, pattern_key),
                 )
-                db.commit()
+            db.commit()
             return keys
 
     async def mark_resolved(self, pattern_key: str, *, verification: str = "") -> None:
