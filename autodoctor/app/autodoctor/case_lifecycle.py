@@ -69,11 +69,22 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
             "active_case_notifications_published": published,
         }
 
+    def _active_notification_cases_sync(self) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                """SELECT * FROM incident_cases
+                WHERE status IN ('new','investigating','diagnosed','repair_available',
+                                 'needs_user_action','verifying','reopened')
+                ORDER BY last_seen DESC"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     async def publish_active_cases(self, *, force: bool = False) -> int:
+        async with self._lock:
+            cases = await asyncio.to_thread(self._active_notification_cases_sync)
         published = 0
-        for case in await self.list_cases(500):
-            if str(case.get("status") or "") not in _ACTIVE_NOTIFICATION_STATUSES:
-                continue
+        for case in cases:
             published += int(await self.publish_case(str(case.get("pattern_key") or ""), force=force))
         return published
 
@@ -124,22 +135,44 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
             )
             db.commit()
 
+    def _inactive_notification_cases_sync(self, force: bool) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as db:
+            db.row_factory = sqlite3.Row
+            if force:
+                rows = db.execute(
+                    """SELECT * FROM incident_cases
+                    WHERE status IN ('resolved','historical','suppressed_nonfatal')
+                    ORDER BY last_seen DESC"""
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """SELECT * FROM incident_cases
+                    WHERE status IN ('resolved','historical','suppressed_nonfatal')
+                      AND last_notification_at IS NOT NULL
+                    ORDER BY last_seen DESC"""
+                ).fetchall()
+        return [dict(row) for row in rows]
+
     async def reconcile_inactive_notifications(self, *, force: bool = False) -> int:
-        """Dismiss stale AutoDoctor notices owned by inactive cases.
+        """Dismiss stale AutoDoctor notices owned by every inactive case.
 
         The first reconciliation after process start is always forced. This closes the
         crash window where Home Assistant accepted a case notification but AutoDoctor
         stopped before persisting ``last_notification_at``. Later maintenance passes
-        use the marker and therefore do not repeatedly dismiss already-clean notices.
+        query only inactive rows that still have a durable sent marker. The query is not
+        limited to the newest 500 cases, so old inactive notices cannot be stranded.
         """
 
         startup_force = self._inactive_notification_reconciliations == 0
         self._inactive_notification_reconciliations += 1
         effective_force = bool(force or startup_force)
+        async with self._lock:
+            cases = await asyncio.to_thread(
+                self._inactive_notification_cases_sync,
+                effective_force,
+            )
         dismissed = 0
-        for case in await self.list_cases(500):
-            if str(case.get("status") or "") not in _INACTIVE_NOTIFICATION_STATUSES:
-                continue
+        for case in cases:
             dismissed += int(
                 await self._dismiss_owned_notification(
                     str(case.get("pattern_key") or ""),
