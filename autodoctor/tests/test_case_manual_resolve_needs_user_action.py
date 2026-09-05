@@ -37,4 +37,4 @@ def test_needs_user_action_case_can_be_explicitly_marked_resolved_after_manual_f
         executor=Executor(),
         approval_nonce="nonce",
     )
-    assert "Mark resolved &amp; dismiss" in text
+    assert "Mark resolved & dismiss" in text
