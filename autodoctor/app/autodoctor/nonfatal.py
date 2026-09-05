@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
+
 from .models import LogEvent
 
-_TPLINK_COORDINATOR_SOURCE = "components/tplink/coordinator.py"
 _KASA_FAMILY = "kasa"
+_TPLINK_COORDINATOR_SOURCE_RE = re.compile(
+    r"(?:^|[\[\('`\"\s,])components/tplink/coordinator\.py(?:$|[\]\)'`\"\s,:])"
+)
 
 
 def nonfatal_observation_reason(event: LogEvent, family: str) -> str | None:
@@ -29,7 +33,7 @@ def nonfatal_observation_reason(event: LogEvent, family: str) -> str | None:
         return None
 
     source = str(event.source or "").replace("\\", "/").lower()
-    if _TPLINK_COORDINATOR_SOURCE not in source:
+    if _TPLINK_COORDINATOR_SOURCE_RE.search(source) is None:
         return None
 
     return (
