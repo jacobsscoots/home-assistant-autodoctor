@@ -8,11 +8,12 @@ from typing import Any
 
 from .ai_usage_recovery import abandon_ai_usage_before_provider, mark_ai_usage_inflight
 from .case_consistency import retire_orphaned_active_case
-from .cases import IncidentCaseManager
+from .case_lifecycle import LifecycleIncidentCaseManager
 from .engine import AutoDoctorEngine
 from .investigator import TargetedReadOnlyInvestigator
 from .llm import NoProvider
 from .models import AIResult, LogEvent
+from .nonfatal import nonfatal_observation_reason
 from .private_target import AUTO_RESOLVE_TARGET, bind_private_reload_target
 from .scheduler import incident_family
 
@@ -32,6 +33,7 @@ bypass its read-only MCP boundary.
 """.strip()
 
 _TRIAGE_CASE_STATUSES = {"new", "reopened"}
+_CASE_MAINTENANCE_INTERVAL_SECONDS = 15 * 60
 
 
 class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
@@ -39,12 +41,14 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
 
     def __init__(self, settings, store, ha, llm, mcp) -> None:
         super().__init__(settings, store, ha, llm, mcp)
-        self.cases = IncidentCaseManager(
+        self.cases = LifecycleIncidentCaseManager(
             store.path,
             ha,
             notifications_enabled=settings.notify_on_new_incident,
         )
-        self.investigator = TargetedReadOnlyInvestigator(mcp)
+        # Reuse the already-authenticated HA client for the fixed private resolver.
+        # This avoids opening a second Supervisor client for every TP-Link refinement.
+        self.investigator = TargetedReadOnlyInvestigator(mcp, ha)
         self._targeted_evidence: dict[str, dict[str, Any]] = {}
         self._analysis_patterns: dict[str, str] = {}
         self._analysis_claim_lock = asyncio.Lock()
@@ -63,15 +67,67 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         self.private_target_last_result = ""
         self.backlog_triage_last_run_at: float | None = None
         self.backlog_triage_last_error = ""
+        self.nonfatal_events_suppressed = 0
+        self.nonfatal_cases_suppressed_startup = 0
+        self.case_maintenance_runs = 0
+        self.case_maintenance_quiet_retired = 0
+        self.case_maintenance_last_error = ""
 
     async def initialize_case_management(self) -> dict[str, int]:
         await self.cases.initialize()
         rows = await self.store.list_recent(self.settings.max_incidents_retained)
-        self.backlog_reconciliation = await self.cases.reconcile_backlog(rows)
+
+        # Do not publish case notifications until deterministic lifecycle policy has
+        # classified the reconciled backlog. This prevents a suppressed non-fatal case
+        # from briefly flashing a notification during startup.
+        self.backlog_reconciliation = await self.cases.reconcile_backlog(
+            rows,
+            publish_active=False,
+        )
+        suppressed = await self._reconcile_nonfatal_cases(rows)
+        self.nonfatal_cases_suppressed_startup += suppressed
+        quiet_retired = await self.cases.retire_quiet_cases()
+        inactive_dismissed = await self.cases.reconcile_inactive_notifications()
+        active_published = await self.cases.publish_active_cases(force=True)
+        self.backlog_reconciliation.update(
+            {
+                "suppressed_nonfatal_cases": suppressed,
+                "quiet_cases_retired": quiet_retired,
+                "inactive_case_notifications_dismissed": inactive_dismissed,
+                "active_case_notifications_published": active_published,
+            }
+        )
         return dict(self.backlog_reconciliation)
+
+    async def _reconcile_nonfatal_cases(self, rows: list[dict[str, Any]]) -> int:
+        latest_by_pattern: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            pattern_key = str(row.get("pattern_key") or "")
+            if not pattern_key:
+                continue
+            current = latest_by_pattern.get(pattern_key)
+            if current is None or float(row.get("last_seen") or 0) > float(
+                current.get("last_seen") or 0
+            ):
+                latest_by_pattern[pattern_key] = row
+
+        suppressed = 0
+        for pattern_key, row in latest_by_pattern.items():
+            event = self._event_from_incident_row(row)
+            family = incident_family(event.name, event.source)
+            reason = nonfatal_observation_reason(event, family)
+            if reason:
+                suppressed += int(await self.cases.mark_suppressed_nonfatal(pattern_key, reason))
+            else:
+                await self.cases.reopen_if_suppressed(pattern_key)
+        return suppressed
 
     async def run_forever(self) -> None:
         triage_task: asyncio.Task[None] | None = None
+        maintenance_task = asyncio.create_task(
+            self._case_maintenance_loop(),
+            name="autodoctor-case-lifecycle-maintenance",
+        )
         if self.settings.case_backlog_triage_enabled and not isinstance(self.llm, NoProvider):
             triage_task = asyncio.create_task(
                 self._backlog_triage_loop(),
@@ -80,9 +136,12 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         try:
             await super().run_forever()
         finally:
+            tasks = [maintenance_task]
             if triage_task is not None:
-                triage_task.cancel()
-                await asyncio.gather(triage_task, return_exceptions=True)
+                tasks.append(triage_task)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _claim_pattern(self, pattern_key: str) -> bool:
         async with self._analysis_claim_lock:
@@ -110,7 +169,22 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             fingerprint_is_new=is_new,
         )
         await self._record_memory_feedback(fp, row, event, is_new)
-        await self.cases.publish_case(pattern_key, force=is_new_case)
+
+        reason = nonfatal_observation_reason(event, family)
+        if reason and await self.cases.mark_suppressed_nonfatal(pattern_key, reason):
+            self.nonfatal_events_suppressed += 1
+            _LOG.info(
+                "Suppressed non-fatal case analysis pattern=%s family=%s; evidence retained",
+                pattern_key,
+                family,
+            )
+            return
+
+        reopened_from_suppression = await self.cases.reopen_if_suppressed(pattern_key)
+        await self.cases.publish_case(
+            pattern_key,
+            force=is_new_case or reopened_from_suppression,
+        )
 
         if isinstance(self.llm, NoProvider):
             return
@@ -269,7 +343,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         retired = await retire_orphaned_active_case(self.store.path, pattern_key)
         if retired:
             self.backlog_triage_orphaned_cases_retired += 1
-            await self.cases.publish_case(pattern_key, force=True)
+            await self.cases.reconcile_inactive_notifications()
         self.backlog_triage_skipped += 1
         return None
 
@@ -291,6 +365,13 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             return False
 
         family = incident_family(event.name, event.source)
+        reason = nonfatal_observation_reason(event, family)
+        if reason and await self.cases.mark_suppressed_nonfatal(pattern_key, reason):
+            self.backlog_triage_skipped += 1
+            return False
+        if await self.cases.reopen_if_suppressed(pattern_key):
+            await self.cases.publish_case(pattern_key, force=True)
+
         if not await self._should_analyze(event, row, family):
             return False
 
@@ -344,6 +425,21 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
                 self.backlog_triage_last_error = str(exc)[:500]
                 _LOG.exception("Case backlog triage cycle failed safely")
             await asyncio.sleep(interval)
+
+    async def _case_maintenance_loop(self) -> None:
+        while True:
+            await asyncio.sleep(_CASE_MAINTENANCE_INTERVAL_SECONDS)
+            self.case_maintenance_runs += 1
+            try:
+                retired = await self.cases.retire_quiet_cases()
+                self.case_maintenance_quiet_retired += retired
+                await self.cases.reconcile_inactive_notifications()
+                self.case_maintenance_last_error = ""
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.case_maintenance_last_error = str(exc)[:500]
+                _LOG.exception("Case lifecycle maintenance failed safely")
 
     async def _handle_success(
         self,
@@ -427,7 +523,23 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             if status in _TRIAGE_CASE_STATUSES
         )
         case_health["notification_mode"] = "pattern-case"
+        case_health["notification_lifecycle"] = await self.cases.lifecycle_health()
         case_health["backlog_reconciliation"] = dict(self.backlog_reconciliation)
+        case_health["nonfatal_observation_filter"] = {
+            "enabled": True,
+            "policy": "raw-kasa-from-tplink-configured-entry-coordinator-only",
+            "events_suppressed_since_start": self.nonfatal_events_suppressed,
+            "cases_suppressed_at_startup": self.nonfatal_cases_suppressed_startup,
+            "evidence_retained": True,
+            "ai_skipped": True,
+            "repairs_skipped": True,
+        }
+        case_health["maintenance"] = {
+            "interval_seconds": _CASE_MAINTENANCE_INTERVAL_SECONDS,
+            "runs": self.case_maintenance_runs,
+            "quiet_cases_retired": self.case_maintenance_quiet_retired,
+            "last_error": self.case_maintenance_last_error,
+        }
         case_health["private_target_resolution"] = {
             "mode": "post-ai-deterministic",
             "identifiers_exposed_to_ai": False,
