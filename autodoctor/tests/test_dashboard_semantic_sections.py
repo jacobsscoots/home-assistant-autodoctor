@@ -33,6 +33,6 @@ def test_dashboard_has_clear_semantic_operational_sections() -> None:
         "Active cases",
         "Notification lifecycle",
         "Operational telemetry",
-        "Exact incident evidence",
+        "Recent incident evidence",
     ):
         assert heading in text
