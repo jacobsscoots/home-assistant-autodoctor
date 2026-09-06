@@ -42,10 +42,52 @@ class NonfatalSuppressionCoalescingFilter(logging.Filter):
         return True
 
 
-def install_nonfatal_log_coalescing(*, every: int = 500) -> None:
-    """Install the filter only on AutoDoctor's case-engine logger."""
+class KasaIncidentCoalescingFilter(logging.Filter):
+    """Coalesce noisy Kasa incident INFO lines without dropping incident evidence.
 
-    logger = logging.getLogger("autodoctor.case_engine")
-    if any(isinstance(item, NonfatalSuppressionCoalescingFilter) for item in logger.filters):
-        return
-    logger.addFilter(NonfatalSuppressionCoalescingFilter(every=every))
+    `AutoDoctorEngine._record_incident` persists the event before logging it, so this
+    filter changes only console volume. The first Kasa incident per pattern after each
+    process start is logged, followed by every Nth repeat. Non-Kasa incident logging is
+    untouched.
+    """
+
+    PREFIX = "Incident %s pattern=%s occurrence=%s %s: %s"
+
+    def __init__(self, every: int = 500) -> None:
+        super().__init__()
+        self.every = max(2, int(every))
+        self._counts: dict[str, int] = defaultdict(int)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg != self.PREFIX:
+            return True
+        args: Any = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        pattern = str(args[1])
+        if not pattern.startswith("kasa/"):
+            return True
+        self._counts[pattern] += 1
+        count = self._counts[pattern]
+        if count == 1:
+            return True
+        if count % self.every != 0:
+            return False
+        record.msg = (
+            "Incident %s pattern=%s occurrence=%s %s: %s; "
+            "coalesced_kasa_events=%s"
+        )
+        record.args = (*args[:5], count)
+        return True
+
+
+def install_nonfatal_log_coalescing(*, every: int = 500) -> None:
+    """Install suppression and Kasa incident coalescing on their source loggers."""
+
+    case_logger = logging.getLogger("autodoctor.case_engine")
+    if not any(isinstance(item, NonfatalSuppressionCoalescingFilter) for item in case_logger.filters):
+        case_logger.addFilter(NonfatalSuppressionCoalescingFilter(every=every))
+
+    engine_logger = logging.getLogger("autodoctor.engine")
+    if not any(isinstance(item, KasaIncidentCoalescingFilter) for item in engine_logger.filters):
+        engine_logger.addFilter(KasaIncidentCoalescingFilter(every=every))
