@@ -71,11 +71,13 @@ async def ingress_or_authenticated_qualification(
     if ingress_remote_allowed(request.remote):
         return await handler(request)
 
+    token = _bearer_token(request)
     if (
         request.method == "GET"
         and request.path == _QUALIFICATION_PATH
         and internal_addon_remote_allowed(request.remote)
-        and await supervisor_token_has_api_access(_bearer_token(request))
+        and token
+        and await supervisor_token_has_api_access(token)
     ):
         return await handler(request)
 
