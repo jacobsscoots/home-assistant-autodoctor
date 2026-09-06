@@ -14,5 +14,5 @@ from autodoctor import AUTODOCTOR_VERSION
 def test_app_and_addon_metadata_versions_match() -> None:
     config_path = Path(__file__).resolve().parents[1] / "config.yaml"
     config = yaml.safe_load(config_path.read_text())
-    assert AUTODOCTOR_VERSION == "0.4.10"
+    assert AUTODOCTOR_VERSION == "0.4.11"
     assert config["version"] == AUTODOCTOR_VERSION

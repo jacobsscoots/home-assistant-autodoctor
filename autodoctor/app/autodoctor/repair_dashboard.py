@@ -8,6 +8,7 @@ from aiohttp import web
 
 from .case_dashboard import CaseDashboard
 from .dashboard import ingress_only
+from .qualification import QualificationReader
 
 
 class RepairDashboard(CaseDashboard):
@@ -16,6 +17,7 @@ class RepairDashboard(CaseDashboard):
     def __init__(self, settings, store, engine, executor) -> None:
         super().__init__(settings, store, engine)
         self.executor = executor
+        self.qualification = QualificationReader(store.path)
 
     async def start(self) -> None:
         app = web.Application(middlewares=[ingress_only])
@@ -25,6 +27,7 @@ class RepairDashboard(CaseDashboard):
         app.router.add_get("/api/cases", self.cases)
         app.router.add_get("/api/repair-plans", self.repair_plans)
         app.router.add_get("/api/repair-executor", self.repair_executor_health)
+        app.router.add_get("/api/qualification", self.qualification_summary)
         app.router.add_post("/api/cases/resolve", self.resolve_case)
         app.router.add_post("/api/repair-plans/{plan_id}/approve", self.approve_plan)
         app.router.add_post("/api/repair-plans/{plan_id}/reject", self.reject_plan)
@@ -40,6 +43,24 @@ class RepairDashboard(CaseDashboard):
 
     async def repair_executor_health(self, request: web.Request) -> web.Response:
         return web.json_response(await self.executor.health())
+
+    async def qualification_summary(self, request: web.Request) -> web.Response:
+        """Authoritative read-only counters for observation/repair qualification audits."""
+
+        raw_since = str(request.query.get("since") or "").strip()
+        since: float | None = None
+        if raw_since:
+            try:
+                since = float(raw_since)
+            except ValueError as exc:
+                raise web.HTTPBadRequest(text="since must be a Unix timestamp") from exc
+            if since < 0:
+                raise web.HTTPBadRequest(text="since must be non-negative")
+        response = web.json_response(await self.qualification.summary(since))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     async def _submitted_payload(self, request: web.Request) -> dict[str, Any]:
         if request.content_type == "application/json":
