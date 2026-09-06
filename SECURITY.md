@@ -12,6 +12,12 @@ Prefer GitHub's private vulnerability reporting / Security Advisory flow when it
 
 When reporting a problem, include only the minimum information needed to reproduce it and redact secrets from logs and configuration.
 
+## Supervisor token boundary
+
+`SUPERVISOR_TOKEN` is a privileged Home Assistant Supervisor credential. A process or coding session that holds it can call Supervisor APIs which may return stored add-on options, including values configured through `password` fields. AutoDoctor cannot redact data returned by Supervisor itself.
+
+Do not expose `SUPERVISOR_TOKEN` to untrusted tooling. For AutoDoctor observation and repair-qualification audits, prefer the ingress-only `/api/qualification` endpoint, which returns only read-only counters and spend totals from AutoDoctor's SQLite database and never returns provider API keys, MCP tokens, repair targets, or approval nonces.
+
 ## Scope
 
 Particularly useful reports include problems involving:
