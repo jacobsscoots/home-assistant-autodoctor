@@ -5,6 +5,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1] / "app"
 sys.path.insert(0, str(ROOT))
 
@@ -47,7 +49,7 @@ def test_qualification_summary_is_authoritative_and_read_only(tmp_path: Path) ->
         assert summary["repair_executions"] == 2
         assert summary["successful_real_repairs"] == 1
         assert summary["ai_usage_stuck"] == 1
-        assert summary["ai_spend_since_usd"] == 0.03
+        assert summary["ai_spend_since_usd"] == pytest.approx(0.03)
 
         with sqlite3.connect(path) as db:
             assert db.execute("SELECT COUNT(*) FROM incident_cases").fetchone()[0] == 3
