@@ -6,8 +6,8 @@ from typing import Any
 
 from aiohttp import web
 
+from .audit_access import ingress_or_authenticated_qualification
 from .case_dashboard import CaseDashboard
-from .dashboard import ingress_only
 from .qualification import QualificationReader
 
 
@@ -20,7 +20,7 @@ class RepairDashboard(CaseDashboard):
         self.qualification = QualificationReader(store.path)
 
     async def start(self) -> None:
-        app = web.Application(middlewares=[ingress_only])
+        app = web.Application(middlewares=[ingress_or_authenticated_qualification])
         app.router.add_get("/", self.index)
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/incidents", self.incidents)
