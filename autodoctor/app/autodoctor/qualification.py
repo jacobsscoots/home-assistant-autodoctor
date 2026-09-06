@@ -18,7 +18,7 @@ class QualificationReader:
     def _summary_sync(self, since: float | None) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp()
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as db:
             case_rows = db.execute(
                 "SELECT status, COUNT(*) FROM incident_cases GROUP BY status"
             ).fetchall()
