@@ -80,7 +80,7 @@ def test_invalid_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(run())
 
 
-def test_missing_bearer_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_bearer_token_is_rejected_before_validator(monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         called = False
 
@@ -97,6 +97,6 @@ def test_missing_bearer_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
             await access.ingress_or_authenticated_qualification(
                 _request(remote="172.30.33.20", path="/api/qualification", token=""), handler
             )
-        assert called is True
+        assert called is False
 
     asyncio.run(run())
