@@ -10,7 +10,7 @@ from .dashboard import ingress_remote_allowed
 
 _HASSIO_IPV4_NETWORK = ipaddress.ip_network("172.30.32.0/23")
 _HASSIO_IPV6_NETWORK = ipaddress.ip_network("fd0c:ac1e:2100::/48")
-_SUPERVISOR_CORE_CONFIG_URL = "http://supervisor/core/api/config"
+_SUPERVISOR_INFO_URL = "http://supervisor/supervisor/info"
 _QUALIFICATION_PATH = "/api/qualification"
 
 
@@ -34,12 +34,16 @@ def _bearer_token(request: web.Request) -> str:
     return token.strip()
 
 
-async def supervisor_token_has_core_access(token: str) -> bool:
-    """Validate a caller token against the fixed Supervisor Core API proxy.
+async def supervisor_token_has_api_access(token: str) -> bool:
+    """Validate a caller token against a protected, non-secret Supervisor endpoint.
 
-    The token is never logged or persisted. This is a narrow authentication check for
-    the sanitized, read-only qualification endpoint; it does not grant access to any
-    dashboard, case, repair-plan, approval, rejection, or execution route.
+    Home Assistant grants Core API and Supervisor API permissions separately. The audit
+    caller only needs to prove that its SUPERVISOR_TOKEN is valid for Supervisor API
+    access; requiring Core API access incorrectly rejects legitimate internal apps that
+    can already read Supervisor state. The response body is discarded.
+
+    The token is never logged, persisted, echoed, or returned. This check authorizes
+    only the sanitized read-only qualification route below.
     """
 
     if not token:
@@ -48,7 +52,7 @@ async def supervisor_token_has_core_access(token: str) -> bool:
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(
-                _SUPERVISOR_CORE_CONFIG_URL,
+                _SUPERVISOR_INFO_URL,
                 headers={"Authorization": f"Bearer {token}"},
                 allow_redirects=False,
             ) as response:
@@ -67,11 +71,13 @@ async def ingress_or_authenticated_qualification(
     if ingress_remote_allowed(request.remote):
         return await handler(request)
 
+    token = _bearer_token(request)
     if (
         request.method == "GET"
         and request.path == _QUALIFICATION_PATH
         and internal_addon_remote_allowed(request.remote)
-        and await supervisor_token_has_core_access(_bearer_token(request))
+        and token
+        and await supervisor_token_has_api_access(token)
     ):
         return await handler(request)
 

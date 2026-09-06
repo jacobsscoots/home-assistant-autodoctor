@@ -38,7 +38,7 @@ def test_authenticated_internal_access_is_qualification_only(monkeypatch: pytest
         async def handler(_request):
             return web.Response(text="ok")
 
-        monkeypatch.setattr(access, "supervisor_token_has_core_access", allow)
+        monkeypatch.setattr(access, "supervisor_token_has_api_access", allow)
 
         response = await access.ingress_or_authenticated_qualification(
             _request(remote="172.30.33.20", path="/api/qualification"), handler
@@ -48,6 +48,11 @@ def test_authenticated_internal_access_is_qualification_only(monkeypatch: pytest
         with pytest.raises(web.HTTPForbidden):
             await access.ingress_or_authenticated_qualification(
                 _request(remote="172.30.33.20", path="/api/cases"), handler
+            )
+
+        with pytest.raises(web.HTTPForbidden):
+            await access.ingress_or_authenticated_qualification(
+                _request(remote="172.30.33.20", path="/api/qualification", method="POST"), handler
             )
 
         with pytest.raises(web.HTTPForbidden):
@@ -66,10 +71,32 @@ def test_invalid_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         async def handler(_request):
             return web.Response(text="ok")
 
-        monkeypatch.setattr(access, "supervisor_token_has_core_access", deny)
+        monkeypatch.setattr(access, "supervisor_token_has_api_access", deny)
         with pytest.raises(web.HTTPForbidden):
             await access.ingress_or_authenticated_qualification(
                 _request(remote="172.30.33.20", path="/api/qualification"), handler
             )
+
+    asyncio.run(run())
+
+
+def test_missing_bearer_token_is_rejected_before_validator(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        called = False
+
+        async def should_not_run(_token: str) -> bool:
+            nonlocal called
+            called = True
+            return True
+
+        async def handler(_request):
+            return web.Response(text="ok")
+
+        monkeypatch.setattr(access, "supervisor_token_has_api_access", should_not_run)
+        with pytest.raises(web.HTTPForbidden):
+            await access.ingress_or_authenticated_qualification(
+                _request(remote="172.30.33.20", path="/api/qualification", token=""), handler
+            )
+        assert called is False
 
     asyncio.run(run())
