@@ -9,6 +9,7 @@ from autodoctor.config import Settings
 from autodoctor.control_dashboard import ControlDashboard
 from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
+from autodoctor.log_filters import install_nonfatal_log_coalescing
 from autodoctor.mcp_backend import MCPBackend
 from autodoctor.repair_executor import RepairExecutor
 from autodoctor.seed_store import SeedAwareIncidentStore
@@ -23,6 +24,7 @@ async def async_main() -> None:
         format="%(asctime)s %(levelname)s [autodoctor] %(message)s",
     )
     suppress_sensitive_http_transport_logs()
+    install_nonfatal_log_coalescing(every=500)
 
     store = SeedAwareIncidentStore(
         "/data/autodoctor.db",
