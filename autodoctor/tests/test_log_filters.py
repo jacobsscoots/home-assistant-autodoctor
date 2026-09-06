@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 from autodoctor.log_filters import (
     KasaIncidentCoalescingFilter,
     NonfatalSuppressionCoalescingFilter,
+    install_nonfatal_log_coalescing,
 )
 
 
@@ -70,6 +71,13 @@ def test_non_kasa_incident_logs_are_untouched() -> None:
     assert record.msg == KasaIncidentCoalescingFilter.PREFIX
 
 
+def test_same_template_from_wrong_logger_is_untouched() -> None:
+    filter_ = KasaIncidentCoalescingFilter(every=3)
+    record = _incident()
+    record.name = "third_party.logger"
+    assert filter_.filter(record) is True
+
+
 def test_unrelated_logs_are_untouched() -> None:
     filter_ = NonfatalSuppressionCoalescingFilter(every=3)
     record = logging.LogRecord(
@@ -83,3 +91,16 @@ def test_unrelated_logs_are_untouched() -> None:
     )
     assert filter_.filter(record) is True
     assert record.msg == "Starting analysis"
+
+
+def test_installation_targets_existing_root_handlers() -> None:
+    root = logging.getLogger()
+    handler = logging.StreamHandler()
+    original_handlers = list(root.handlers)
+    try:
+        root.handlers[:] = [handler]
+        install_nonfatal_log_coalescing(every=3)
+        assert any(isinstance(item, NonfatalSuppressionCoalescingFilter) for item in handler.filters)
+        assert any(isinstance(item, KasaIncidentCoalescingFilter) for item in handler.filters)
+    finally:
+        root.handlers[:] = original_handlers
