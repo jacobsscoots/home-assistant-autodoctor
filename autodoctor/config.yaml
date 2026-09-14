@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.4.13"
+version: "0.4.14"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
@@ -11,8 +11,9 @@ description: >-
   budget or creating repair targets, keeps persistent notifications aligned to active
   case lifecycle, provides a responsive ingress control dashboard, recovers interrupted
   investigations and AI usage reservations after restart, gathers bounded read-only
-  diagnostics, produces conservative repair plans, and can execute a tiny approval-gated
-  deterministic repair allowlist.
+  diagnostics, produces conservative repair plans, and can execute a tiny deterministic
+  repair allowlist either after human approval or automatically when the explicit
+  low-risk auto-apply option is enabled and every existing executor gate passes.
 url: "https://github.com/jacobsscoots/home-assistant-autodoctor"
 startup: application
 boot: auto
