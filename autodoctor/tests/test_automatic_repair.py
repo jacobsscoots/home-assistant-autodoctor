@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+
+ROOT = Path(__file__).resolve().parents[1] / "app"
+sys.path.insert(0, str(ROOT))
 
 from autodoctor.automatic_repair import AutomaticRepairCoordinator
 
