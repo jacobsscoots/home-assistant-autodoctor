@@ -92,10 +92,17 @@ configuration:
     description: Maintain one AutoDoctor persistent notification per active failure pattern instead of one notification per exact fingerprint.
   repair_executor_enabled:
     name: Enable repair executor
-    description: Enables the tiny deterministic repair executor. Manual execution still requires ingress approval. If auto-apply is also enabled, only newly-created plans that pass the same executor validation gates may run automatically.
+    description: >-
+      Enables the tiny deterministic repair executor. Manual execution still requires ingress approval.
+      If auto-apply is also enabled, only newly-created plans that pass the same executor validation
+      gates may run automatically.
   repair_verification_seconds:
     name: Repair verification window
     description: Seconds AutoDoctor waits after a repair before checking integration health and confirming the incident did not recur.
   auto_apply_low_risk:
     name: Auto-apply low-risk repairs
-    description: Opt-in automatic execution for newly-created deterministic repair plans only. Existing safety gates remain mandatory: executor enabled, low risk, confidence at least 0.90, exactly one validated config-entry target, allowlisted reload operation, and post-repair verification. Older pending plans are never auto-applied after enabling or restarting.
+    description: >-
+      Opt-in automatic execution for newly-created deterministic repair plans only. Existing safety gates
+      remain mandatory: executor enabled, low risk, confidence at least 0.90, exactly one validated
+      config-entry target, allowlisted reload operation, and post-repair verification. Older pending plans
+      are never auto-applied after enabling or restarting.
