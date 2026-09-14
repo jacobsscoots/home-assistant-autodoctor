@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from autodoctor.ai_usage_recovery import recover_orphaned_ai_usage
+from autodoctor.automatic_repair import AutoApplyRepairExecutor, AutomaticRepairCoordinator
 from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
 from autodoctor.control_dashboard import ControlDashboard
@@ -11,7 +12,6 @@ from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
 from autodoctor.log_filters import install_nonfatal_log_coalescing
 from autodoctor.mcp_backend import MCPBackend
-from autodoctor.repair_executor import RepairExecutor
 from autodoctor.seed_store import SeedAwareIncidentStore
 from autodoctor.startup_recovery import recover_interrupted_case_investigations
 from autodoctor.transport_logging import suppress_sensitive_http_transport_logs
@@ -35,7 +35,8 @@ async def async_main() -> None:
     llm = build_provider(settings)
     mcp = MCPBackend(settings)
     engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
-    executor = RepairExecutor(settings, store.path, ha, mcp, engine.cases)
+    executor = AutoApplyRepairExecutor(settings, store.path, ha, mcp, engine.cases)
+    automatic_repairs = AutomaticRepairCoordinator(settings, engine.cases, executor)
     dashboard = ControlDashboard(settings, store, engine, executor)
 
     await store.initialize()
@@ -65,9 +66,22 @@ async def async_main() -> None:
     )
     await dashboard.start()
 
+    auto_repair_task: asyncio.Task[None] | None = None
+    if automatic_repairs.enabled and executor.enabled:
+        logging.getLogger(__name__).warning(
+            "Automatic low-risk repair is enabled; only newly-created plans that pass the existing deterministic executor gates may run"
+        )
+        auto_repair_task = asyncio.create_task(
+            automatic_repairs.run_forever(),
+            name="autodoctor-automatic-repair",
+        )
+
     try:
         await engine.run_forever()
     finally:
+        if auto_repair_task is not None:
+            auto_repair_task.cancel()
+            await asyncio.gather(auto_repair_task, return_exceptions=True)
         await dashboard.stop()
         await executor.close()
         await mcp.close()
