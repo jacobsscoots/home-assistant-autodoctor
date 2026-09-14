@@ -34,7 +34,7 @@ class FakeExecutor:
             return True, "approved", "entry_abc123"
         return False, "blocked by existing executor gate", None
 
-    async def approve_and_execute(self, plan_id):
+    async def auto_execute(self, plan_id):
         self.calls.append(plan_id)
         return {"plan_id": plan_id, "execution_id": "exec_test", "status": "verifying"}
 
@@ -108,7 +108,7 @@ def test_pending_verification_blocks_second_automatic_repair() -> None:
     asyncio.run(run())
 
 
-def test_new_eligible_plan_uses_same_executor_path() -> None:
+def test_new_eligible_plan_uses_automatic_executor_entry_point() -> None:
     async def run():
         executor = FakeExecutor()
         coordinator = AutomaticRepairCoordinator(
