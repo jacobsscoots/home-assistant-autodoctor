@@ -4,10 +4,10 @@ import asyncio
 import logging
 
 from autodoctor.ai_usage_recovery import recover_orphaned_ai_usage
+from autodoctor.automatic_dashboard import AutomaticControlDashboard
 from autodoctor.automatic_repair import AutoApplyRepairExecutor, AutomaticRepairCoordinator
 from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
-from autodoctor.control_dashboard import ControlDashboard
 from autodoctor.ha import HomeAssistantClient
 from autodoctor.llm import build_provider
 from autodoctor.log_filters import install_nonfatal_log_coalescing
@@ -37,7 +37,7 @@ async def async_main() -> None:
     engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
     executor = AutoApplyRepairExecutor(settings, store.path, ha, mcp, engine.cases)
     automatic_repairs = AutomaticRepairCoordinator(settings, engine.cases, executor)
-    dashboard = ControlDashboard(settings, store, engine, executor)
+    dashboard = AutomaticControlDashboard(settings, store, engine, executor)
 
     await store.initialize()
     ai_usage_recovery = await recover_orphaned_ai_usage(store.path)
