@@ -14,8 +14,8 @@ only the tiny deterministic repair allowlist after an individual Home Assistant 
   response validation while preserving the existing safety gates and redaction.
 - Makes cached MCP and notification lifecycle health snapshots synchronous and
   removes an unused internal case-resolution argument.
-- Shares pinned runtime dependencies between the container and CI through
-  `autodoctor/requirements.txt`, with weekly Dependabot checks for Python packages.
+- Locks runtime and test dependencies to exact versions and verified package hashes,
+  with shared runtime inputs and weekly Dependabot checks for Python packages.
 - Resolves Sonar findings and documents two rule-specific Home Assistant platform
   exceptions in `SECURITY.md`; the fixed Supervisor network and async setup hook
   retain their required behaviour.

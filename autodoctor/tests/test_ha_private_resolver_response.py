@@ -83,8 +83,9 @@ def test_resolver_returns_only_validated_match_fields():
     ],
 )
 def test_resolver_rejects_malformed_or_inconsistent_matches(result):
+    operation = resolve_response({"type": "result", "success": True, "result": result})
     with pytest.raises(RuntimeError, match="private TP-Link resolver"):
-        asyncio.run(resolve_response({"type": "result", "success": True, "result": result}))
+        asyncio.run(operation)
 
 
 @pytest.mark.parametrize(
@@ -92,5 +93,6 @@ def test_resolver_rejects_malformed_or_inconsistent_matches(result):
     [{"type": "event", "success": True}, {"type": "result", "success": False}],
 )
 def test_resolver_rejects_unsuccessful_responses(response):
+    operation = resolve_response(response)
     with pytest.raises(RuntimeError, match="unavailable or rejected"):
-        asyncio.run(resolve_response(response))
+        asyncio.run(operation)

@@ -16,7 +16,7 @@ LABEL \
 COPY requirements.txt /tmp/requirements.txt
 
 RUN apk add --no-cache ca-certificates py3-pip python3 && \
-    python3 -m pip install --no-cache-dir --break-system-packages \
+    python3 -m pip install --no-cache-dir --break-system-packages --require-hashes \
       -r /tmp/requirements.txt
 
 COPY app /app

@@ -14,6 +14,7 @@ Thanks for helping improve AutoDoctor.
 From the repository root, run the same focused checks used by CI where possible:
 
 ```bash
+python -m pip install --require-hashes -r autodoctor/requirements-test.txt
 python -m compileall -q autodoctor/app autodoctor/tests
 python -m pytest -q autodoctor/tests
 ```
@@ -32,6 +33,21 @@ else:
 PY
 )" --build-arg BUILD_ARCH=amd64 autodoctor
 ```
+
+## Dependency updates
+
+Edit the direct pins in `autodoctor/requirements.in` or `autodoctor/requirements-test.in`.
+Using uv, regenerate both complete dependency locks in order from the repository root:
+
+```bash
+uv pip compile --universal --python-version 3.12 --generate-hashes autodoctor/requirements.in -o autodoctor/requirements.txt
+uv pip compile --universal --python-version 3.12 --generate-hashes autodoctor/requirements-test.in -o autodoctor/requirements-test.txt
+```
+
+The universal locks cover Python 3.12 and newer, including CI and the Alpine container.
+The test lock constrains runtime packages to the runtime lock. Commit both regenerated
+files and run the local checks and container build above. CI and Docker enforce the
+recorded hashes during installation.
 
 ## Pull requests
 
