@@ -387,7 +387,7 @@ class RepairExecutor:
                 evidence,
                 now,
             )
-        await self.cases.mark_resolved(str(plan["pattern_key"]), verification="verified reload")
+        await self.cases.mark_resolved(str(plan["pattern_key"]))
 
     def _complete_success_sync(
         self,

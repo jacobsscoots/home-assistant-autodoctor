@@ -13,11 +13,11 @@ LABEL \
   io.hass.version="${BUILD_VERSION}" \
   io.hass.arch="${BUILD_ARCH}"
 
+COPY requirements.txt /tmp/requirements.txt
+
 RUN apk add --no-cache ca-certificates py3-pip python3 && \
     python3 -m pip install --no-cache-dir --break-system-packages \
-      'aiohttp==3.14.3' \
-      'httpx2==2.12.0' \
-      'mcp==2.1.1'
+      -r /tmp/requirements.txt
 
 COPY app /app
 COPY run.sh /run.sh

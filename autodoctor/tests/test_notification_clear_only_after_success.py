@@ -42,10 +42,12 @@ def test_notification_marker_is_not_cleared_until_home_assistant_accepts_dismiss
         await manager.publish_case(pattern, force=True)
         await manager.mark_resolved(pattern)
         failed = await manager.get_case(pattern)
-        assert failed is not None and failed["last_notification_at"] is not None
+        assert failed is not None
+        assert failed["last_notification_at"] is not None
         ha.fail = False
         assert await manager.reconcile_inactive_notifications() == 1
         cleaned = await manager.get_case(pattern)
-        assert cleaned is not None and cleaned["last_notification_at"] is None
+        assert cleaned is not None
+        assert cleaned["last_notification_at"] is None
 
     asyncio.run(run())

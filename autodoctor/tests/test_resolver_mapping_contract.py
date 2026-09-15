@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MATCH_PATH = ROOT / "custom_components" / "autodoctor_private_resolver" / "match.py"
 
 _spec = importlib.util.spec_from_file_location("resolver_match_contract", MATCH_PATH)
-assert _spec is not None and _spec.loader is not None
+assert _spec is not None
+assert _spec.loader is not None
 _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)
 

@@ -17,7 +17,7 @@ class FakeMCP:
         self.profile = profile
         self.calls: list[tuple[str, dict, str]] = []
 
-    async def health(self):
+    def health(self):
         return {"enabled": True, "connected": True, "server_profile": self.profile}
 
     async def call_readonly(self, tool, arguments=None, *, purpose=""):
@@ -162,7 +162,7 @@ def test_unknown_library_does_not_fall_back_to_fuzzy_integration_search() -> Non
 
 def test_investigator_does_not_call_tools_when_mcp_disconnected() -> None:
     class Disconnected(FakeMCP):
-        async def health(self):
+        def health(self):
             return {"enabled": True, "connected": False, "server_profile": "ha-mcp"}
 
     async def run() -> None:

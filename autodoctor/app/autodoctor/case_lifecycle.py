@@ -301,14 +301,14 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
             db.commit()
             return retired
 
-    async def mark_resolved(self, pattern_key: str, *, verification: str = "") -> None:
+    async def mark_resolved(self, pattern_key: str) -> None:
         case = await self.get_case(pattern_key)
         if not case:
             return
         await self._set_status(pattern_key, "resolved")
         await self._dismiss_owned_notification(pattern_key, case)
 
-    async def lifecycle_health(self) -> dict[str, Any]:
+    def lifecycle_health(self) -> dict[str, Any]:
         return {
             "notification_policy": "active-cases-only",
             "inactive_statuses": sorted(_INACTIVE_NOTIFICATION_STATUSES),

@@ -41,7 +41,8 @@ def test_mark_resolved_is_idempotent_after_notification_cleanup(tmp_path: Path) 
         await manager.mark_resolved(pattern)
         await manager.mark_resolved(pattern)
         case = await manager.get_case(pattern)
-        assert case is not None and case["status"] == "resolved"
+        assert case is not None
+        assert case["status"] == "resolved"
         assert len(ha.dismissed) == 1
 
     asyncio.run(run())

@@ -143,7 +143,7 @@ def test_manual_resolution_clears_notification_marker_and_recurrence_reopens(tmp
         await manager.initialize()
         await _record(manager, "pattern/manual/x", 1000.0)
         assert await manager.publish_case("pattern/manual/x", force=True)
-        await manager.mark_resolved("pattern/manual/x", verification="manual dashboard resolution")
+        await manager.mark_resolved("pattern/manual/x")
         resolved = await manager.get_case("pattern/manual/x")
         assert resolved is not None
         assert resolved["status"] == "resolved"

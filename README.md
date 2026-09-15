@@ -8,6 +8,20 @@ conservative read-only AI diagnoses. Its diagnostic MCP boundary is allowlisted/
 fail-closed. Automatic repairs remain disabled: when the repair executor is enabled, it can execute
 only the tiny deterministic repair allowlist after an individual Home Assistant ingress approval.
 
+## v0.4.15 quality and dependency maintenance
+
+- Simplifies repair candidate selection, dashboard rendering, and private resolver
+  response validation while preserving the existing safety gates and redaction.
+- Makes cached MCP and notification lifecycle health snapshots synchronous and
+  removes an unused internal case-resolution argument.
+- Shares pinned runtime dependencies between the container and CI through
+  `autodoctor/requirements.txt`, with weekly Dependabot checks for Python packages.
+- Resolves Sonar findings and documents two rule-specific Home Assistant platform
+  exceptions in `SECURITY.md`; the fixed Supervisor network and async setup hook
+  retain their required behaviour.
+
+This release does not change stored cases, configuration defaults, or repair permissions.
+
 ## v0.4.10 lifecycle and dashboard
 
 v0.4.10 tightens the distinction between evidence, active problems, and resolved history:

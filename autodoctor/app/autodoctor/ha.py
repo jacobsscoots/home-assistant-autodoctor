@@ -144,6 +144,11 @@ class HomeAssistantClient:
             )
             response = await self._receive_handshake_json(ws)
 
+        return self._validate_tplink_resolver_response(response)
+
+    @staticmethod
+    def _validate_tplink_resolver_response(response: dict[str, Any]) -> dict[str, Any]:
+        """Validate the complete result and return only the permitted match fields."""
         if response.get("type") != "result" or not response.get("success"):
             raise RuntimeError("private TP-Link resolver is unavailable or rejected the request")
         result = response.get("result")

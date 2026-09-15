@@ -537,7 +537,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             if status in _TRIAGE_CASE_STATUSES
         )
         case_health["notification_mode"] = "pattern-case"
-        case_health["notification_lifecycle"] = await self.cases.lifecycle_health()
+        case_health["notification_lifecycle"] = self.cases.lifecycle_health()
         case_health["backlog_reconciliation"] = dict(self.backlog_reconciliation)
         case_health["nonfatal_observation_filter"] = {
             "enabled": True,

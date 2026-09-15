@@ -44,6 +44,7 @@ def test_historical_quiet_case_reopens_on_recurrence(tmp_path: Path) -> None:
             fingerprint_is_new=False,
         )
         case = await manager.get_case(pattern)
-        assert case is not None and case["status"] == "reopened"
+        assert case is not None
+        assert case["status"] == "reopened"
 
     asyncio.run(run())

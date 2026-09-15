@@ -19,8 +19,7 @@ class FakeCases:
     async def get_case(self, pattern_key: str):
         return {"pattern_key": pattern_key, "status": self.status}
 
-    async def mark_resolved(self, pattern_key: str, *, verification: str = "") -> None:
-        _ = verification
+    async def mark_resolved(self, pattern_key: str) -> None:
         self.resolved.append(pattern_key)
 
 

@@ -51,7 +51,7 @@ def test_verified_fix_resolution_dismisses_case_notification(tmp_path: Path) -> 
         owned = ha.notifications[-1]
 
         # RepairExecutor calls this exact case-manager method after verification passes.
-        await manager.mark_resolved(pattern, verification="verified reload")
+        await manager.mark_resolved(pattern)
         case = await manager.get_case(pattern)
         assert case is not None
         assert case["status"] == "resolved"

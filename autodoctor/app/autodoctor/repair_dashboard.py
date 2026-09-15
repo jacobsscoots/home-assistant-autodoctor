@@ -115,10 +115,7 @@ class RepairDashboard(CaseDashboard):
                 text="This case is actively investigating, awaiting repair approval, or verifying and cannot be manually resolved."
             )
         if status not in {"resolved", "historical", "suppressed_nonfatal"}:
-            await self.engine.cases.mark_resolved(
-                pattern_key,
-                verification="Marked resolved by the user from the Home Assistant ingress dashboard.",
-            )
+            await self.engine.cases.mark_resolved(pattern_key)
         return self._redirect_home(2)
 
     async def approve_plan(self, request: web.Request) -> web.Response:
