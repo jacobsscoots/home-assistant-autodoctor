@@ -512,7 +512,7 @@ class MCPBackend:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-    async def health(self) -> dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         if not self.enabled:
             return {
                 "enabled": False,

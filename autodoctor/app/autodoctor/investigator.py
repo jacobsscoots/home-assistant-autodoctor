@@ -12,7 +12,7 @@ from .private_target import (
 )
 
 _LOG = logging.getLogger(__name__)
-_ENTITY_RE = re.compile(r"\b(?:automation|script|scene|sensor|binary_sensor|switch|light|climate|cover|lock|alarm_control_panel|input_boolean|input_number|input_select|input_text|timer|person|device_tracker)\.[a-zA-Z0-9_]+\b")
+_ENTITY_RE = re.compile(r"\b(?:automation|script|scene|sensor|binary_sensor|switch|light|climate|cover|lock|alarm_control_panel|input_boolean|input_number|input_select|input_text|timer|person|device_tracker)\.(?a:\w+)\b")
 
 
 class TargetedReadOnlyInvestigator:
@@ -291,7 +291,7 @@ class TargetedReadOnlyInvestigator:
         """Return AI-safe evidence and separate private executor evidence."""
 
         try:
-            health = await self.mcp.health()
+            health = self.mcp.health()
         except Exception:
             return {"enabled": False, "reads": []}, {"private_target_resolution": {"candidates": []}}
         if not health.get("enabled") or not health.get("connected"):

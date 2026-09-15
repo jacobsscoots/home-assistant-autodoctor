@@ -575,7 +575,7 @@ class AutoDoctorEngine:
 
     async def health(self) -> dict[str, Any]:
         open_incidents = await self.store.open_incident_count()
-        mcp = await self.mcp.health()
+        mcp = self.mcp.health()
         usage = await self.store.monthly_ai_usage()
         memory = await self.store.memory_health()
         now = datetime.now(tz=timezone.utc).timestamp()

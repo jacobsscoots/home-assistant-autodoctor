@@ -61,7 +61,9 @@ def websocket_match_tplink_host(
     )
 
 
-async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+# HA awaits this hook so callback registration runs on its event loop. The hook
+# must remain async even though registration itself does not yield; see SECURITY.md.
+async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:  # NOSONAR(S7503)
     """Register the fixed read-only AutoDoctor resolver command."""
 
     websocket_api.async_register_command(hass, websocket_match_tplink_host)

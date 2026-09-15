@@ -8,7 +8,9 @@ from aiohttp import web
 
 from .dashboard import ingress_remote_allowed
 
-_HASSIO_IPV4_NETWORK = ipaddress.ip_network("172.30.32.0/23")
+# Supervisor's fixed internal bridge, not a deployment-specific host. SECURITY.md
+# records the upstream contract; source membership alone never grants audit access.
+_HASSIO_IPV4_NETWORK = ipaddress.ip_network("172.30.32.0/23")  # NOSONAR(S1313)
 _HASSIO_IPV6_NETWORK = ipaddress.ip_network("fd0c:ac1e:2100::/48")
 _SUPERVISOR_INFO_URL = "http://supervisor/supervisor/info"
 _QUALIFICATION_PATH = "/api/qualification"

@@ -17,7 +17,7 @@ class KasaMCP:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict, str]] = []
 
-    async def health(self):
+    def health(self):
         return {"enabled": True, "connected": True, "server_profile": "ha-mcp"}
 
     async def call_readonly(self, tool, arguments=None, *, purpose=""):

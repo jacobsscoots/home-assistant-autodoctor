@@ -529,7 +529,7 @@ class IncidentCaseManager:
             )
             db.commit()
 
-    async def mark_resolved(self, pattern_key: str, *, verification: str = "") -> None:
+    async def mark_resolved(self, pattern_key: str) -> None:
         case = await self.get_case(pattern_key)
         if not case:
             return

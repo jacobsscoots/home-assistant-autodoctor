@@ -76,9 +76,13 @@ def test_backlog_dashboard_card_surfaces_worker_progress() -> None:
         }
     )
     assert "Active backlog triage" in card
-    assert "Triage worker" in card and "ON" in card
-    assert "Pending" in card and ">9<" in card
-    assert "Diagnosed" in card and ">3<" in card
-    assert "Repair ready" in card and ">2<" in card
+    assert "Triage worker" in card
+    assert "ON" in card
+    assert "Pending" in card
+    assert ">9<" in card
+    assert "Diagnosed" in card
+    assert ">3<" in card
+    assert "Repair ready" in card
+    assert ">2<" in card
     assert "60s" in card
     assert "Automatic repairs" not in card

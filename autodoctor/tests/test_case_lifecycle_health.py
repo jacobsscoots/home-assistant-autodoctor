@@ -19,7 +19,7 @@ def test_lifecycle_health_exposes_notification_policy(tmp_path: Path) -> None:
     async def run() -> None:
         manager = LifecycleIncidentCaseManager(str(tmp_path / "db.sqlite"), HA())
         await manager.initialize()
-        health = await manager.lifecycle_health()
+        health = manager.lifecycle_health()
         assert health["notification_policy"] == "active-cases-only"
         assert "resolved" in health["inactive_statuses"]
         assert "historical" in health["inactive_statuses"]

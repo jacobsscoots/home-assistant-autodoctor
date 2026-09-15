@@ -192,7 +192,7 @@ def test_legacy_refresh_preserves_v020_auto_context(tmp_path: Path) -> None:
         value._session = lambda: (FakeHTTPClient(), fake)  # type: ignore[method-assign]
         assert await value.refresh_context()
         assert fake.calls == [("get_system_status", {}), ("list_integrations", {})]
-        health = await value.health()
+        health = value.health()
         assert health["server_profile"] == "ganhammar"
         assert health["auth_mode"] == "bearer"
         assert health["auto_context_tools"] == ["get_system_status", "list_integrations"]
@@ -242,7 +242,7 @@ def test_ha_mcp_profile_uses_only_minimal_overview_automatically(tmp_path: Path)
         assert cached["server_profile"] == "ha-mcp"
         assert cached["diagnostic_context"]["ha_get_overview"]["example_entity"] == "<ENTITY>"
         assert cached["diagnostic_context"]["ha_get_overview"]["area_name"] == "<REDACTED>"
-        health = await value.health()
+        health = value.health()
         assert health["connected"] is True
         assert health["server_profile"] == "ha-mcp"
         assert health["auth_mode"] == "secret-path"
@@ -294,7 +294,7 @@ def test_unknown_mcp_server_profile_fails_closed_and_clears_context(tmp_path: Pa
         value._session = lambda: (FakeHTTPClient(), fake)  # type: ignore[method-assign]
         assert not await value.refresh_context()
         assert value._context_cache == {}
-        health = await value.health()
+        health = value.health()
         assert health["connected"] is False
         assert "unsupported MCP server tool profile" in health["error"]
 
@@ -315,7 +315,7 @@ def test_disabled_mcp_never_opens_session(tmp_path: Path) -> None:
         value._session = lambda: (_ for _ in ()).throw(AssertionError("network touched"))  # type: ignore[method-assign]
         await value.start()
         assert value.get_relevant_config() == {}
-        health = await value.health()
+        health = value.health()
         assert health["enabled"] is False
         assert health["connected"] is False
         assert health["mode"] == "read-only"

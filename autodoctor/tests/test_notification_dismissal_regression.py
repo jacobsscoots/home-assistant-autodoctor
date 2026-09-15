@@ -55,8 +55,8 @@ def test_verified_or_manual_resolution_dismisses_once_and_future_recurrence_can_
         assert await manager.publish_case(pattern, force=True)
         owned_id = ha.notifications[-1]
 
-        await manager.mark_resolved(pattern, verification="fixed")
-        await manager.mark_resolved(pattern, verification="fixed again")
+        await manager.mark_resolved(pattern)
+        await manager.mark_resolved(pattern)
         assert ha.dismissed == [owned_id]
 
         with sqlite3.connect(db_path) as db:
@@ -75,7 +75,8 @@ def test_verified_or_manual_resolution_dismisses_once_and_future_recurrence_can_
             fingerprint_is_new=False,
         )
         case = await manager.get_case(pattern)
-        assert case is not None and case["status"] == "reopened"
+        assert case is not None
+        assert case["status"] == "reopened"
         assert await manager.publish_case(pattern, force=True)
         assert ha.notifications[-1] == owned_id
 

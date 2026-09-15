@@ -191,6 +191,39 @@ def _incident_row(item: dict[str, Any]) -> str:
     )
 
 
+def _incident_rows(incidents: list[dict[str, Any]]) -> str:
+    return "".join(_incident_row(item) for item in incidents[:50]) or (
+        '<tr><td colspan="6" class="empty-cell">No incident evidence captured yet.</td></tr>'
+    )
+
+
+def _overview_metrics(
+    health: dict[str, Any],
+    budget: dict[str, Any],
+    active_case_count: int,
+    proposed_count: int,
+    executor_health: dict[str, Any],
+) -> str:
+    mcp = health.get("mcp") or {}
+    watcher = str(health.get("status") or "unknown")
+    watcher_good = watcher.lower() in {"ok", "healthy", "running", "watching"}
+    mcp_connected = bool(mcp.get("connected"))
+    executor_enabled = bool(executor_health.get("enabled"))
+    spend = _money(budget.get("spent_usd")) if budget.get("enabled") else "Locked"
+    budget_stop = _money(budget.get("stop_threshold_usd"), 2) if budget.get("enabled") else "AI budget off"
+
+    return "".join(
+        (
+            _metric("Watcher", watcher.title(), hint="Live system-log stream", state="good" if watcher_good else "warn"),
+            _metric("Active cases", f"{active_case_count:,}", hint="Cases still needing monitoring or action", state="warn" if active_case_count else "good"),
+            _metric("Repair approvals", f"{proposed_count:,}", hint="Always requires your approval", state="danger" if proposed_count else "good"),
+            _metric("AI spend", spend, hint=f"Stop threshold {budget_stop}"),
+            _metric("MCP diagnostics", "Connected" if mcp_connected else "Offline", hint=str(mcp.get("server_profile") or "read-only"), state="good" if mcp_connected else "warn"),
+            _metric("Repair executor", "Approval gated" if executor_enabled else "Off", hint="Automatic repairs are always off", state="good"),
+        )
+    )
+
+
 def render_dashboard(
     *,
     health: dict[str, Any],
@@ -206,7 +239,6 @@ def render_dashboard(
     case_health = health.get("case_management") or {}
     statuses = case_health.get("cases_by_status") or {}
     budget = health.get("ai_budget") or {}
-    mcp = health.get("mcp") or {}
     triage = case_health.get("backlog_triage") or {}
     lifecycle = case_health.get("notification_lifecycle") or {}
     nonfatal = case_health.get("nonfatal_observation_filter") or {}
@@ -218,22 +250,8 @@ def render_dashboard(
     active_cases.sort(key=_case_sort_key)
     proposed = [plan for plan in plans if str(plan.get("status") or "") == "proposed"]
 
-    watcher = str(health.get("status") or "unknown")
-    watcher_good = watcher.lower() in {"ok", "healthy", "running", "watching"}
-    mcp_connected = bool(mcp.get("connected"))
-    executor_enabled = bool(executor_health.get("enabled"))
-    spend = _money(budget.get("spent_usd")) if budget.get("enabled") else "Locked"
-    budget_stop = _money(budget.get("stop_threshold_usd"), 2) if budget.get("enabled") else "AI budget off"
-
-    metrics = "".join(
-        (
-            _metric("Watcher", watcher.title(), hint="Live system-log stream", state="good" if watcher_good else "warn"),
-            _metric("Active cases", f"{len(active_cases):,}", hint="Cases still needing monitoring or action", state="warn" if active_cases else "good"),
-            _metric("Repair approvals", f"{len(proposed):,}", hint="Always requires your approval", state="danger" if proposed else "good"),
-            _metric("AI spend", spend, hint=f"Stop threshold {budget_stop}"),
-            _metric("MCP diagnostics", "Connected" if mcp_connected else "Offline", hint=str(mcp.get("server_profile") or "read-only"), state="good" if mcp_connected else "warn"),
-            _metric("Repair executor", "Approval gated" if executor_enabled else "Off", hint="Automatic repairs are always off", state="good"),
-        )
+    metrics = _overview_metrics(
+        health, budget, len(active_cases), len(proposed), executor_health
     )
 
     repair_html = "".join(
@@ -249,9 +267,7 @@ def render_dashboard(
         '<div><strong>No active cases</strong><p>Nothing currently needs your attention.</p></div></div>'
     )
 
-    incident_rows = "".join(_incident_row(item) for item in incidents[:50]) or (
-        '<tr><td colspan="6" class="empty-cell">No incident evidence captured yet.</td></tr>'
-    )
+    incident_rows = _incident_rows(incidents)
 
     lifecycle_summary = (
         f'{int(statuses.get("resolved", 0)):,} resolved · '

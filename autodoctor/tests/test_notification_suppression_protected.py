@@ -34,6 +34,7 @@ def test_suppression_protects_every_user_or_execution_sensitive_status(tmp_path:
             await manager._set_status(pattern, status)
             assert not await manager.mark_suppressed_nonfatal(pattern, "noise")
             case = await manager.get_case(pattern)
-            assert case is not None and case["status"] == status
+            assert case is not None
+            assert case["status"] == status
 
     asyncio.run(run())

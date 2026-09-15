@@ -41,7 +41,8 @@ def test_startup_reconcile_dismisses_stale_notice_for_historical_case(tmp_path: 
         await manager._set_status(pattern, "historical")
         assert await manager.reconcile_inactive_notifications() == 1
         case = await manager.get_case(pattern)
-        assert case is not None and case["last_notification_at"] is None
+        assert case is not None
+        assert case["last_notification_at"] is None
         assert len(ha.dismissed) == 1
 
     asyncio.run(run())

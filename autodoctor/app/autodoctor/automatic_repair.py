@@ -158,6 +158,19 @@ class AutomaticRepairCoordinator:
         self.started_at = datetime.now(tz=timezone.utc).timestamp()
         self._attempted_plan_ids: set[str] = set()
 
+    def _is_automatic_candidate(self, plan: dict[str, Any], plan_id: str) -> bool:
+        """Select new, unattempted proposals before the existing executor validation."""
+        if not plan_id or plan_id in self._attempted_plan_ids:
+            return False
+        if str(plan.get("status") or "") != "proposed":
+            return False
+        # Never auto-execute a proposal that predates this process. This prevents
+        # enabling the setting or restarting after an upgrade from silently applying
+        # an older plan that was previously waiting for human review.
+        if float(plan.get("created_at") or 0) < self.started_at:
+            return False
+        return True
+
     async def run_once(self) -> int:
         if not self.enabled or not self.executor.enabled:
             return 0
@@ -170,14 +183,7 @@ class AutomaticRepairCoordinator:
         plans.sort(key=lambda plan: float(plan.get("created_at") or 0))
         for plan in plans:
             plan_id = str(plan.get("plan_id") or "")
-            if not plan_id or plan_id in self._attempted_plan_ids:
-                continue
-            if str(plan.get("status") or "") != "proposed":
-                continue
-            # Never auto-execute a proposal that predates this process. This prevents
-            # enabling the setting or restarting after an upgrade from silently applying
-            # an older plan that was previously waiting for human review.
-            if float(plan.get("created_at") or 0) < self.started_at:
+            if not self._is_automatic_candidate(plan, plan_id):
                 continue
 
             allowed, reason, _target = self.executor.validate_plan(plan)

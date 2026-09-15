@@ -31,3 +31,23 @@ Particularly useful reports include problems involving:
 - dependency or GitHub Actions supply-chain risks
 
 AutoDoctor is designed to keep risky repairs approval-required. A finding that can bypass those safeguards is considered security-relevant.
+
+## Reviewed Home Assistant contracts
+
+Two rule-specific Sonar exceptions preserve required platform behaviour. They do not
+exclude either file or disable other rules:
+
+- `S1313` on the IPv4 network in `audit_access.py`: Home Assistant Supervisor
+  [defines its internal bridge as `172.30.32.0/23`](https://github.com/home-assistant/supervisor/blob/main/supervisor/const.py).
+  This is a fixed platform network, not a configurable remote host. The audit route
+  still requires a valid Supervisor API token, a `GET` request, and the exact
+  `/api/qualification` path. Tests cover network boundaries and rejected requests.
+- `S7503` on the private resolver's `async_setup`: Home Assistant
+  [awaits this integration hook](https://github.com/home-assistant/core/blob/dev/homeassistant/setup.py)
+  so its callback registration runs on the event loop. The
+  [built-in WebSocket integration](https://github.com/home-assistant/core/blob/dev/homeassistant/components/websocket_api/__init__.py)
+  uses the same coroutine-without-await pattern. Making this a synchronous setup
+  hook would move registration to an executor thread.
+
+Keep these exceptions limited to the named rules and lines. Recheck the upstream
+contracts before changing the network boundary or integration setup lifecycle.
