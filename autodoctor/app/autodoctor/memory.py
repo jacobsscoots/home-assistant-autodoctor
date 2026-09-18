@@ -30,6 +30,34 @@ DEFAULT_EXPIRY_DAYS: dict[str, int] = {
 
 _ENTITY = re.compile(r"\b[a-z_]+\.\w+\b")
 _TOKEN = re.compile(r"\w{3,}")
+_TEMPLATE_LOGGER_PREFIXES = (
+    "homeassistant.components.automation.",
+    "homeassistant.components.script.",
+)
+_SCRIPT_OWNER = re.compile(
+    r"^(.+?):\s+(?=Error executing script\b|Error rendering template\b|"
+    r"(?:Choose|If|Repeat|Parallel|Sequence|While|Until|Then|Else) at step \d+)",
+    re.IGNORECASE,
+)
+
+
+def _template_scope(event: LogEvent, combined: str) -> str:
+    """Identify the owner, not an arbitrary entity referenced inside its template."""
+    logger = event.name.strip().lower()
+    if any(
+        logger.startswith(prefix) and len(logger) > len(prefix)
+        for prefix in _TEMPLATE_LOGGER_PREFIXES
+    ):
+        return f"logger:{logger}"
+    owner = _SCRIPT_OWNER.match(event.message)
+    if owner:
+        # Unlike runtime values, digits and colons can distinguish controller names.
+        alias = " ".join(redact(owner.group(1)).split()).casefold()
+        return f"alias:{alias}"
+    # No reliable owner: prefer separate evidence over merging unrelated controllers.
+    # Keep numeric identifiers here; all identity material stays inside the digest.
+    evidence = " ".join(redact(combined).split()).casefold()
+    return f"evidence:{logger}|{normalize_for_fingerprint(event.source)}|{evidence}"
 
 
 def trust_score(trust_class: str) -> float:
@@ -74,6 +102,8 @@ def pattern_signature(event: LogEvent, family: str) -> tuple[str, str]:
     if label == "other":
         broad = normalize_for_fingerprint(_ENTITY.sub("<ENTITY>", combined))[:400]
         material = f"{family}|{label}|{broad}"
+    elif label == "template_error":
+        material = f"{family}|{label}|scope-v1|{_template_scope(event, combined)}"
     else:
         material = f"{family}|{label}"
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:10]

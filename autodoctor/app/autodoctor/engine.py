@@ -116,9 +116,12 @@ class AutoDoctorEngine:
         self,
         event: LogEvent,
     ) -> tuple[str, str, str, str, dict[str, Any], bool]:
-        fp = fingerprint(event)
         family = incident_family(event.name, event.source)
         pattern_key, pattern_label = pattern_signature(event, family)
+        # New template scopes start new evidence ledgers. Do not relabel old mixed
+        # history or carry its diagnosis/repair approval into a different case.
+        namespace = pattern_key if pattern_label == "template_error" else ""
+        fp = fingerprint(event, namespace=namespace)
         row, is_new = await self.store.record(fp, event, pattern_key, pattern_label)
         _LOG.info(
             "Incident %s pattern=%s occurrence=%s %s: %s",
@@ -446,8 +449,6 @@ class AutoDoctorEngine:
             analysis.action,
             analysis.summary[:220],
         )
-        if self.settings.auto_apply_low_risk:
-            _LOG.warning("auto_apply_low_risk requested, but v0.1 executor is intentionally disabled")
 
     async def _handle_analysis_failure(
         self,

@@ -5,6 +5,8 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 
+from .database import database_connection
+
 _LOG = logging.getLogger(__name__)
 
 _META_SCHEMA = """
@@ -40,7 +42,7 @@ async def mark_ai_usage_inflight(db_path: str, usage_id: int) -> bool:
 
 
 def _mark_ai_usage_inflight_sync(db_path: str, usage_id: int) -> bool:
-    with sqlite3.connect(db_path) as db:
+    with database_connection(db_path) as db:
         cursor = db.execute(
             "UPDATE ai_usage SET status = 'inflight' WHERE id = ? AND status = 'reserved'",
             (int(usage_id),),
@@ -60,7 +62,7 @@ async def abandon_ai_usage_before_provider(db_path: str, usage_id: int, reason: 
 
 
 def _abandon_ai_usage_before_provider_sync(db_path: str, usage_id: int, reason: str) -> bool:
-    with sqlite3.connect(db_path) as db:
+    with database_connection(db_path) as db:
         cursor = db.execute(
             """UPDATE ai_usage
             SET status = 'abandoned_pre_provider', cost_usd = 0, error = ?
@@ -95,7 +97,7 @@ def _sum_for_status(db: sqlite3.Connection, status: str) -> tuple[int, float]:
 
 
 def _recover_orphaned_ai_usage_sync(db_path: str) -> AIUsageRecoveryResult:
-    with sqlite3.connect(db_path) as db:
+    with database_connection(db_path) as db:
         db.executescript(_META_SCHEMA)
         initialized = db.execute(
             "SELECT value FROM autodoctor_meta WHERE key = ?",

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
+
+from .database import database_connection
 
 
 class QualificationReader:
@@ -18,7 +19,7 @@ class QualificationReader:
     def _summary_sync(self, since: float | None) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp()
-        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as db:
+        with database_connection(self.db_path, readonly=True) as db:
             case_rows = db.execute(
                 "SELECT status, COUNT(*) FROM incident_cases GROUP BY status"
             ).fetchall()

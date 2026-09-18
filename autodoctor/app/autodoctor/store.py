@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from .database import database_connection
 from .budget import month_bounds_utc
 from .memory import (
     SEED_KNOWLEDGE,
@@ -168,7 +169,7 @@ class IncidentStore:
             await asyncio.to_thread(self._initialize_sync)
 
     def _initialize_sync(self) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             self._ensure_incident_schema(db)
             self._ensure_ai_usage_schema(db)
             db.executescript(_MEMORY_SCHEMA)
@@ -359,7 +360,7 @@ class IncidentStore:
         pattern_key: str,
         pattern_label: str,
     ) -> tuple[dict[str, Any], bool]:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.row_factory = sqlite3.Row
             existing = db.execute("SELECT * FROM incidents WHERE fingerprint = ?", (fp,)).fetchone()
             is_new = existing is None
@@ -401,7 +402,7 @@ class IncidentStore:
             await asyncio.to_thread(self._save_analysis_sync, fp, payload, now)
 
     def _save_analysis_sync(self, fp: str, payload: str, now: float) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.execute(
                 "UPDATE incidents SET analysis_json = ?, last_analysis_at = ? WHERE fingerprint = ?",
                 (payload, now, fp),
@@ -455,7 +456,7 @@ class IncidentStore:
             await asyncio.to_thread(self._save_memory_record_sync, record)
 
     def _save_memory_record_sync(self, record: dict[str, Any]) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             self._upsert_knowledge_sync(db, record)
             db.commit()
 
@@ -484,7 +485,7 @@ class IncidentStore:
         worsened_recurrences: int,
         now: float,
     ) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 """SELECT * FROM knowledge
@@ -525,7 +526,7 @@ class IncidentStore:
             await asyncio.to_thread(self._refresh_quiet_outcomes_sync, cutoff, now)
 
     def _refresh_quiet_outcomes_sync(self, cutoff: float, now: float) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 """SELECT k.*, i.last_seen
@@ -565,7 +566,7 @@ class IncidentStore:
 
     def _get_or_create_entity_aliases_sync(self, entity_ids: list[str], now: float) -> dict[str, str]:
         aliases: dict[str, str] = {}
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             for entity_id in entity_ids:
                 row = db.execute("SELECT alias FROM entity_aliases WHERE entity_id = ?", (entity_id,)).fetchone()
                 if row:
@@ -701,7 +702,7 @@ class IncidentStore:
     ) -> None:
         if not aliases:
             return
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             family_alias = f"family:{family}"
             self._upsert_topology_node(db, family_alias, "family", "", family, now)
             controllers, observed_aliases = self._collect_topology_aliases(
@@ -759,7 +760,7 @@ class IncidentStore:
         now: float,
     ) -> dict[str, Any]:
         candidates: dict[str, dict[str, Any]] = {}
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 """SELECT * FROM knowledge
@@ -862,7 +863,7 @@ class IncidentStore:
             return await asyncio.to_thread(self._memory_health_sync, now)
 
     def _memory_health_sync(self, now: float) -> dict[str, Any]:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             total = int(db.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0])
             expired = int(
                 db.execute("SELECT COUNT(*) FROM knowledge WHERE expires_at IS NOT NULL AND expires_at <= ?", (now,)).fetchone()[0]
@@ -896,7 +897,7 @@ class IncidentStore:
             await asyncio.to_thread(self._mark_analysis_attempt_sync, fp, now)
 
     def _mark_analysis_attempt_sync(self, fp: str, now: float) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.execute("UPDATE incidents SET last_analysis_at = ? WHERE fingerprint = ?", (float(now), fp))
             db.commit()
 
@@ -935,7 +936,7 @@ class IncidentStore:
         now = now_ts if now_ts is not None else datetime.now(tz=timezone.utc).timestamp()
         month_start, month_end, _ = month_bounds_utc(now)
         safe_family = str(family or "unknown")[:200]
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             spent = float(
                 db.execute(
                     """SELECT COALESCE(SUM(cost_usd), 0) FROM ai_usage
@@ -984,7 +985,7 @@ class IncidentStore:
             await asyncio.to_thread(self._finalize_ai_usage_sync, usage_id, input_tokens, output_tokens, cost_usd)
 
     def _finalize_ai_usage_sync(self, usage_id: int, input_tokens: int, output_tokens: int, cost_usd: float) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.execute(
                 """UPDATE ai_usage SET status = 'succeeded', input_tokens = ?, output_tokens = ?,
                     cost_usd = ?, error = NULL WHERE id = ?""",
@@ -997,7 +998,7 @@ class IncidentStore:
             await asyncio.to_thread(self._fail_ai_usage_sync, usage_id, error)
 
     def _fail_ai_usage_sync(self, usage_id: int, error: str) -> None:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.execute("UPDATE ai_usage SET status = 'failed', error = ? WHERE id = ?", (str(error)[:1000], int(usage_id)))
             db.commit()
 
@@ -1006,7 +1007,7 @@ class IncidentStore:
             return await asyncio.to_thread(self._list_recent_sync, limit)
 
     def _list_recent_sync(self, limit: int) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute("SELECT * FROM incidents ORDER BY last_seen DESC LIMIT ?", (limit,)).fetchall()
             return [dict(row) for row in rows]
@@ -1016,7 +1017,7 @@ class IncidentStore:
             return await asyncio.to_thread(self._open_incident_count_sync)
 
     def _open_incident_count_sync(self) -> int:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             return int(
                 db.execute(
                     "SELECT COUNT(*) FROM incidents WHERE status IN ('open','reopened')"
@@ -1028,7 +1029,7 @@ class IncidentStore:
             return await asyncio.to_thread(self._ai_count_since_sync, since_ts)
 
     def _ai_count_since_sync(self, since_ts: float) -> int:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             return int(
                 db.execute(
                     """SELECT COUNT(*) FROM ai_usage
@@ -1042,7 +1043,7 @@ class IncidentStore:
             return await asyncio.to_thread(self._ai_count_for_family_since_sync, family, since_ts)
 
     def _ai_count_for_family_since_sync(self, family: str, since_ts: float) -> int:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             return int(
                 db.execute(
                     """SELECT COUNT(*) FROM ai_usage
@@ -1057,7 +1058,7 @@ class IncidentStore:
             return await asyncio.to_thread(self._ai_family_counts_since_sync, since_ts)
 
     def _ai_family_counts_since_sync(self, since_ts: float) -> dict[str, int]:
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             rows = db.execute(
                 """SELECT family, COUNT(*) FROM ai_usage
                 WHERE ts >= ? AND family != ''
@@ -1075,7 +1076,7 @@ class IncidentStore:
     def _monthly_ai_usage_sync(self, now_ts: float | None) -> dict[str, Any]:
         now = now_ts if now_ts is not None else datetime.now(tz=timezone.utc).timestamp()
         month_start, month_end, month = month_bounds_utc(now)
-        with sqlite3.connect(self.path) as db:
+        with database_connection(self.path) as db:
             row = db.execute(
                 """SELECT
                     COALESCE(SUM(CASE WHEN status != 'blocked_budget' THEN cost_usd ELSE 0 END), 0),

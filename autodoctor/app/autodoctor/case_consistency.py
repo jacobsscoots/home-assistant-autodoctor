@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
+
+from .database import database_connection
 
 _ACTIVE_TRIAGE_STATUSES = ("new", "reopened")
 
@@ -28,7 +29,7 @@ def _retire_orphaned_active_case_sync(db_path: str, pattern_key: str) -> bool:
     if not key:
         return False
 
-    with sqlite3.connect(db_path) as db:
+    with database_connection(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         retained = db.execute(
             "SELECT 1 FROM incidents WHERE pattern_key = ? LIMIT 1",

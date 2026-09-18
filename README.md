@@ -5,8 +5,26 @@ This repository is a Home Assistant App (add-on) store repository containing **A
 AutoDoctor watches Home Assistant's `system_log_event` stream, fingerprints and deduplicates
 incidents, stores them persistently, groups them into operational cases, and can optionally request
 conservative read-only AI diagnoses. Its diagnostic MCP boundary is allowlisted/read-only and
-fail-closed. Automatic repairs remain disabled: when the repair executor is enabled, it can execute
-only the tiny deterministic repair allowlist after an individual Home Assistant ingress approval.
+fail-closed. Automatic repairs are disabled by default. With the repair executor enabled, the tiny
+deterministic allowlist requires individual ingress approval unless low-risk auto-apply is explicitly
+enabled; automatic execution must pass the same validation and post-repair verification gates.
+
+## v0.4.16 72-hour audit reliability fixes
+
+- Coordinates SQLite access across incident, case, executor, lifecycle, recovery and audit workers
+  using a per-database gate. Transactions commit/roll back and connections close before the next
+  local operation. Lock waits remain bounded; no database body or Home Assistant call is replayed.
+- Removes the obsolete per-analysis warning claiming the executor is disabled. The real startup
+  arming warning and coordinator/executor failures remain visible.
+- Scopes template-error cases to their automation/script logger or owning alias, preserving numeric
+  identifiers. Missing-owner errors use conservative evidence-specific grouping.
+- New template scopes start fresh fingerprint ledgers. Existing mixed history, counts, diagnoses
+  and repair approvals are retained rather than guessed, reassigned or copied into new cases.
+  Old case lifecycle remains unchanged; this is not a retrospective split of ambiguous history.
+
+Repair permissions, allowlists, defaults, AI budget gates and the verification window are unchanged.
+No live incident or repair is required to install this update. Keep add-on auto-update off and
+install manually after the release checks pass.
 
 ## v0.4.15 quality and dependency maintenance
 

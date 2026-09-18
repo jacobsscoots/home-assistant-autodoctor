@@ -149,3 +149,60 @@ def test_auto_execute_uses_normal_gates_verifies_and_records_provenance(tmp_path
         await executor.close()
 
     asyncio.run(run())
+
+
+def test_competing_executors_cannot_reload_the_same_plan_twice(tmp_path: Path) -> None:
+    async def run() -> None:
+        cases, first, ha = await _build(tmp_path, auto_apply=True)
+        second = AutoApplyRepairExecutor(
+            Settings(repair_executor_enabled=True, auto_apply_low_risk=True),
+            first.db_path, ha, FakeMCP(), cases,
+        )
+        await second.initialize()
+        plan = await _make_plan(cases)
+        try:
+            results = await asyncio.gather(
+                first.auto_execute(plan["plan_id"]),
+                second.auto_execute(plan["plan_id"]),
+                return_exceptions=True,
+            )
+            assert sum(isinstance(result, dict) for result in results) == 1
+            assert sum(isinstance(result, (PermissionError, RuntimeError)) for result in results) == 1
+            assert ha.reload_calls == [_TARGET]
+            from autodoctor.database import database_connection
+            with database_connection(first.db_path, readonly=True) as db:
+                assert db.execute("SELECT COUNT(*) FROM repair_executions").fetchone()[0] == 1
+        finally:
+            await first.close()
+            await second.close()
+
+    asyncio.run(run())
+
+
+def test_database_failure_before_execution_never_calls_home_assistant(tmp_path: Path, monkeypatch) -> None:
+    from contextlib import closing
+
+    async def run() -> None:
+        cases, executor, ha = await _build(tmp_path, auto_apply=True)
+        plan = await _make_plan(cases)
+        original_connect = sqlite3.connect
+
+        def short_timeout_connect(*args, **kwargs):
+            kwargs["timeout"] = 0.02
+            return original_connect(*args, **kwargs)
+
+        try:
+            with closing(original_connect(executor.db_path)) as external:
+                external.execute("BEGIN EXCLUSIVE")
+                with monkeypatch.context() as patch:
+                    patch.setattr(sqlite3, "connect", short_timeout_connect)
+                    with pytest.raises(sqlite3.OperationalError, match="locked"):
+                        await executor.auto_execute(plan["plan_id"])
+                assert ha.reload_calls == []
+                external.rollback()
+            stored = await executor.get_plan(plan["plan_id"])
+            assert stored is not None and stored["status"] == "proposed"
+        finally:
+            await executor.close()
+
+    asyncio.run(run())
