@@ -9,6 +9,19 @@ fail-closed. Automatic repairs are disabled by default. With the repair executor
 deterministic allowlist requires individual ingress approval unless low-risk auto-apply is explicitly
 enabled; automatic execution must pass the same validation and post-repair verification gates.
 
+## v0.4.17 dependency-install hardening and test clarity
+
+- Requires hash-checked prebuilt wheels for CI and container dependency installation. Missing
+  wheels fail installation instead of falling back to source-build scripts; dependency pins stay unchanged.
+- Checks availability and hashes of Alpine ARM64 runtime wheels alongside the AMD64 image smoke test.
+  The ARM64 check is a download-only compatibility check, not an ARM64 runtime test.
+- Splits composite assertions and isolates expected exception operations without removing rollback,
+  connection-closing, contention, no-replay, cancellation, duplicate-repair or history checks.
+- Adds regression checks for the dependency-install restrictions. No Sonar rules are suppressed.
+
+Includes the v0.4.16 fixes below. No repair logic, permissions, settings or verification behaviour changed.
+Keep add-on auto-update off and update manually only after the release checks pass.
+
 ## v0.4.16 72-hour audit reliability fixes
 
 - Coordinates SQLite access across incident, case, executor, lifecycle, recovery and audit workers

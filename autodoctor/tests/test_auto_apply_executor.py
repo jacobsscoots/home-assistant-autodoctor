@@ -201,7 +201,8 @@ def test_database_failure_before_execution_never_calls_home_assistant(tmp_path: 
                 assert ha.reload_calls == []
                 external.rollback()
             stored = await executor.get_plan(plan["plan_id"])
-            assert stored is not None and stored["status"] == "proposed"
+            assert stored is not None
+            assert stored["status"] == "proposed"
         finally:
             await executor.close()
 
