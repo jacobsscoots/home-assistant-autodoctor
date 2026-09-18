@@ -1,0 +1,26 @@
+name: Temporary 72h fix workbench
+
+on:
+  push:
+    branches: ['fix/72h-reliability-v0416']
+    paths: ['.github/workflows/72h-fix-workbench.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    if: github.repository == 'jacobsscoots/home-assistant-autodoctor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Archive tracked public source only
+        run: git archive --format=tar.gz --output=source.tar.gz HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: autodoctor-72h-source
+          path: source.tar.gz
+          retention-days: 1
