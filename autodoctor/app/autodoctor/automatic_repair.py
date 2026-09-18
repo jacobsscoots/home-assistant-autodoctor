@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from .database import database_connection
 from .repair_executor import RepairExecutor
 
 _LOG = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ class AutoApplyRepairExecutor(RepairExecutor):
             await asyncio.to_thread(self._ensure_execution_mode_column_sync)
 
     def _ensure_execution_mode_column_sync(self) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             columns = {
                 str(row[1])
                 for row in db.execute("PRAGMA table_info(repair_executions)").fetchall()
@@ -57,7 +58,7 @@ class AutoApplyRepairExecutor(RepairExecutor):
         return result
 
     def _mark_execution_mode_sync(self, execution_id: str, mode: str) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 "UPDATE repair_executions SET execution_mode=? WHERE execution_id=?",
                 (str(mode)[:32], execution_id),

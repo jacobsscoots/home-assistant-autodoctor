@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from .database import database_connection
 from . import AUTODOCTOR_VERSION
 
 _EXECUTION_SCHEMA = """
@@ -60,7 +61,7 @@ class RepairExecutor:
             await asyncio.to_thread(self._initialize_sync)
 
     def _initialize_sync(self) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.executescript(_EXECUTION_SCHEMA)
             db.commit()
 
@@ -81,7 +82,7 @@ class RepairExecutor:
             return await asyncio.to_thread(self._get_plan_sync, plan_id)
 
     def _get_plan_sync(self, plan_id: str) -> dict[str, Any] | None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             row = db.execute("SELECT * FROM repair_plans WHERE plan_id = ?", (plan_id,)).fetchone()
             if not row:
@@ -218,7 +219,7 @@ class RepairExecutor:
         started: float,
         baseline_last_seen: float,
     ) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 """UPDATE repair_plans SET status='approved', approved_at=?, updated_at=?, error=''
                 WHERE plan_id=? AND status='proposed'""",
@@ -254,7 +255,7 @@ class RepairExecutor:
         await self.cases.publish_case(str(plan["pattern_key"]), force=True)
 
     def _mark_verifying_sync(self, plan_id: str, execution_id: str, now: float) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 "UPDATE repair_plans SET status='verifying', executed_at=?, updated_at=? WHERE plan_id=?",
                 (now, now, plan_id),
@@ -281,7 +282,7 @@ class RepairExecutor:
         return len(ids)
 
     def _pending_verification_ids_sync(self) -> list[str]:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             rows = db.execute(
                 "SELECT execution_id FROM repair_executions WHERE status='verifying'"
             ).fetchall()
@@ -302,7 +303,7 @@ class RepairExecutor:
             return await asyncio.to_thread(self._get_execution_sync, execution_id)
 
     def _get_execution_sync(self, execution_id: str) -> dict[str, Any] | None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             row = db.execute(
                 "SELECT * FROM repair_executions WHERE execution_id=?", (execution_id,)
@@ -396,7 +397,7 @@ class RepairExecutor:
         evidence: dict[str, Any],
         now: float,
     ) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             db.execute(
                 """UPDATE repair_plans SET status='succeeded', verified_at=?, updated_at=?, error=''
@@ -518,7 +519,7 @@ class RepairExecutor:
         evidence: dict[str, Any],
         now: float,
     ) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 "UPDATE repair_plans SET status=?, updated_at=?, error=? WHERE plan_id=?",
                 (status, now, str(error)[:1000], plan_id),
@@ -540,7 +541,7 @@ class RepairExecutor:
             await asyncio.to_thread(self._update_plan_status_sync, plan_id, status, error)
 
     def _update_plan_status_sync(self, plan_id: str, status: str, error: str) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 "UPDATE repair_plans SET status=?, updated_at=?, error=? WHERE plan_id=?",
                 (status, self._now(), str(error)[:1000], plan_id),

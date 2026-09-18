@@ -5,6 +5,7 @@ import logging
 import sqlite3
 from typing import Any
 
+from .database import database_connection
 from .cases import IncidentCaseManager
 
 _LOG = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         }
 
     def _active_notification_cases_sync(self) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 """SELECT * FROM incident_cases
@@ -128,7 +129,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         return True
 
     def _clear_notification_marker_sync(self, pattern_key: str) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 "UPDATE incident_cases SET last_notification_at = NULL WHERE pattern_key = ?",
                 (pattern_key,),
@@ -136,7 +137,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
             db.commit()
 
     def _inactive_notification_cases_sync(self, force: bool) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             if force:
                 rows = db.execute(
@@ -204,7 +205,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         return True
 
     def _mark_suppressed_nonfatal_sync(self, pattern_key: str, reason: str) -> bool:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT status FROM incident_cases WHERE pattern_key = ?",
@@ -236,7 +237,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
             return await asyncio.to_thread(self._reopen_if_suppressed_sync, pattern_key)
 
     def _reopen_if_suppressed_sync(self, pattern_key: str) -> bool:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             row = db.execute(
                 "SELECT status FROM incident_cases WHERE pattern_key = ?",
                 (pattern_key,),
@@ -285,7 +286,7 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
         return [str(row[0]) for row in rows]
 
     def _retire_quiet_cases_sync(self, cutoff: float, now: float) -> list[str]:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute("BEGIN IMMEDIATE")
             keys = self._quiet_case_rows(db, cutoff)
             retired: list[str] = []

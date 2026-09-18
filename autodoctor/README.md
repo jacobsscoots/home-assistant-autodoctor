@@ -16,8 +16,11 @@ as before. With MCP enabled it may add a small bounded snapshot from explicit re
 
 ## Safety boundary
 
-**v0.2.1 cannot intentionally modify Home Assistant.** The repair executor remains hard-disabled
-even if the `auto_apply_low_risk` option is enabled.
+**Automatic repairs are disabled by default.** The executor can reload a single, validated
+config entry after explicit ingress approval. When both `repair_executor_enabled` and
+`auto_apply_low_risk` are explicitly enabled, newly created low-risk plans can run automatically
+through the same validation and mandatory post-repair verification gates. There is no generic
+write-capable MCP or service-call interface.
 
 Current pipeline:
 

@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from .database import database_connection
 from .models import Analysis, LogEvent
 
 _CASE_SCHEMA = """
@@ -90,7 +91,7 @@ class IncidentCaseManager:
             await asyncio.to_thread(self._initialize_sync)
 
     def _initialize_sync(self) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.executescript(_CASE_SCHEMA)
             db.commit()
 
@@ -136,7 +137,7 @@ class IncidentCaseManager:
     ) -> tuple[dict[str, Any], bool]:
         key = str(pattern_key or f"fingerprint/{fingerprint}")
         now = float(timestamp)
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             existing = db.execute(
                 _CASE_BY_PATTERN_SQL, (key,)
@@ -245,7 +246,7 @@ class IncidentCaseManager:
     def _merge_backlog_sync(self, groups: list[dict[str, Any]]) -> None:
         now = self._now()
         active_cutoff = now - _BACKLOG_ACTIVE_WINDOW_SECONDS
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             for item in groups:
                 existing = db.execute(
                     "SELECT status FROM incident_cases WHERE pattern_key = ?",
@@ -373,7 +374,7 @@ class IncidentCaseManager:
         }
 
     def _save_plan_sync(self, plan: dict[str, Any]) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 """INSERT INTO repair_plans
                 (plan_id, pattern_key, fingerprint, created_at, updated_at, status,
@@ -404,7 +405,7 @@ class IncidentCaseManager:
             await asyncio.to_thread(self._set_status_sync, pattern_key, status)
 
     def _set_status_sync(self, pattern_key: str, status: str) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 "UPDATE incident_cases SET status = ?, updated_at = ? WHERE pattern_key = ?",
                 (status, self._now(), pattern_key),
@@ -421,7 +422,7 @@ class IncidentCaseManager:
         confidence: float,
         repair_plan_id: str | None,
     ) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 """UPDATE incident_cases SET status = ?, summary = ?, root_cause = ?,
                    risk = ?, confidence = ?, repair_plan_id = ?, updated_at = ?
@@ -444,7 +445,7 @@ class IncidentCaseManager:
             return await asyncio.to_thread(self._get_case_sync, pattern_key)
 
     def _get_case_sync(self, pattern_key: str) -> dict[str, Any] | None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             row = db.execute(
                 _CASE_BY_PATTERN_SQL, (pattern_key,)
@@ -456,7 +457,7 @@ class IncidentCaseManager:
             return await asyncio.to_thread(self._list_cases_sync, limit)
 
     def _list_cases_sync(self, limit: int) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM incident_cases ORDER BY last_seen DESC LIMIT ?",
@@ -469,7 +470,7 @@ class IncidentCaseManager:
             return await asyncio.to_thread(self._list_repair_plans_sync, limit)
 
     def _list_repair_plans_sync(self, limit: int) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM repair_plans ORDER BY created_at DESC LIMIT ?",
@@ -522,7 +523,7 @@ class IncidentCaseManager:
         return True
 
     def _mark_notified_sync(self, pattern_key: str, now: float) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with database_connection(self.db_path) as db:
             db.execute(
                 "UPDATE incident_cases SET last_notification_at = ? WHERE pattern_key = ?",
                 (now, pattern_key),

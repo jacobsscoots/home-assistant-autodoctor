@@ -22,7 +22,7 @@ def normalize_for_fingerprint(text: str) -> str:
     return _WS.sub(" ", text).strip().lower()
 
 
-def fingerprint(event: LogEvent) -> str:
+def fingerprint(event: LogEvent, *, namespace: str = "") -> str:
     exception_head = event.exception.splitlines()[0] if event.exception else ""
     payload = "|".join(
         (
@@ -33,4 +33,6 @@ def fingerprint(event: LogEvent) -> str:
             normalize_for_fingerprint(exception_head),
         )
     )
+    if namespace:
+        payload += f"|namespace:{namespace}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
