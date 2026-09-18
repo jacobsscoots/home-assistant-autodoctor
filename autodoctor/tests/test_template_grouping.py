@@ -97,7 +97,8 @@ def test_template_upgrade_preserves_legacy_history_and_starts_clean_cases(tmp_pa
         assert len(current) == 3
         assert sum(case["occurrences"] for case in current) == 5
         legacy = await cases.get_case(old_key)
-        assert legacy is not None and legacy["status"] == "needs_user_action"
+        assert legacy is not None
+        assert legacy["status"] == "needs_user_action"
         assert all(case["repair_plan_id"] is None for case in current if case["pattern_key"] != old_key)
 
     asyncio.run(run())

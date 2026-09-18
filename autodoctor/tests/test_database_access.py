@@ -123,10 +123,17 @@ def test_managed_connection_rolls_back_and_closes_on_failure(tmp_path: Path) -> 
     path = str(tmp_path / "rollback.db")
     with database_connection(path) as db:
         db.execute("CREATE TABLE sample (value INTEGER)")
-    with pytest.raises(ValueError, match="abort"):
+    failed_db: sqlite3.Connection | None = None
+
+    def insert_then_abort() -> None:
+        nonlocal failed_db
         with database_connection(path) as failed_db:
             failed_db.execute("INSERT INTO sample VALUES (1)")
             raise ValueError("abort")
+
+    with pytest.raises(ValueError, match="abort"):
+        insert_then_abort()
+    assert failed_db is not None
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         failed_db.execute("SELECT 1")
     with database_connection(path, readonly=True) as db:
@@ -144,9 +151,10 @@ def test_readonly_access_escapes_uri_characters_and_never_creates_database(tmp_p
         with pytest.raises(sqlite3.OperationalError, match="readonly"):
             db.execute("INSERT INTO sample VALUES (1)")
     missing = tmp_path / "missing.db"
+    missing_path = str(missing)
     with pytest.raises(sqlite3.OperationalError):
-        with database_connection(str(missing), readonly=True):
-            pytest.fail("read-only access must not create a database")
+        with database_connection(missing_path, readonly=True):
+            pass  # pytest.raises fails if opening the missing database succeeds.
     assert not missing.exists()
 
 
@@ -159,13 +167,17 @@ def test_external_lock_failure_is_bounded_and_does_not_replay_body(tmp_path: Pat
     with database_connection(path) as db:
         db.execute("CREATE TABLE sample (value INTEGER)")
     entered = []
+
+    def insert_once() -> None:
+        with database_connection(path, timeout=0.02) as db:
+            entered.append(True)
+            db.execute("INSERT INTO sample VALUES (1)")
+
     with closing(sqlite3.connect(path)) as external:
         external.execute("BEGIN EXCLUSIVE")
         started = monotonic()
         with pytest.raises(sqlite3.OperationalError, match="locked"):
-            with database_connection(path, timeout=0.02) as db:
-                entered.append(True)
-                db.execute("INSERT INTO sample VALUES (1)")
+            insert_once()
         assert monotonic() - started < 1
         external.rollback()
     assert entered == [True]
@@ -184,8 +196,9 @@ def test_same_database_path_aliases_share_a_bounded_gate(tmp_path: Path) -> None
             def access_alias() -> None:
                 with database_connection(alias, timeout=0.02):
                     pytest.fail("the first connection still owns the gate")
+            pending = pool.submit(access_alias)
             with pytest.raises(sqlite3.OperationalError, match="local access timeout"):
-                pool.submit(access_alias).result(timeout=1)
+                pending.result(timeout=1)
     with database_connection(alias, timeout=0.02) as db:
         assert db.execute("SELECT 1").fetchone() == (1,)
 
@@ -220,7 +233,8 @@ def test_cancelling_coroutine_does_not_release_its_worker_database_gate(tmp_path
             assert not pending.done()
         finally:
             release.set()
-        assert pending is not None and await pending == 1
+        assert pending is not None
+        assert await pending == 1
 
     asyncio.run(run())
 

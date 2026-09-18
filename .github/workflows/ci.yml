@@ -29,7 +29,7 @@ jobs:
           python-version: '3.13'
       - name: Install test dependencies
         run: >-
-          python -m pip install --require-hashes
+          python -m pip install --require-hashes --only-binary=:all:
           -r autodoctor/requirements-test.txt
       - name: Compile Python
         run: >-
@@ -90,4 +90,13 @@ jobs:
             test -r /app/main.py
             test -x /run.sh
             python3 -c "import aiohttp, httpx2; from mcp import Client"
+          '
+
+          # Confirm the same locked runtime dependencies also have Alpine ARM64 wheels.
+          # This downloads and checks hashes only; it does not claim an ARM64 smoke test.
+          docker run --rm --entrypoint /bin/sh "$IMAGE" -c '
+            set -eu
+            python3 -m pip download --require-hashes --only-binary=:all: \
+              --platform musllinux_1_2_aarch64 --dest /tmp/arm64-wheels \
+              -r /tmp/requirements.txt
           '
