@@ -18,7 +18,9 @@ jobs:
       - name: Verify and apply exact reviewed source
         run: python .github/apply-backup-integration.py
       - name: Install hash-locked wheels
-        run: python -m pip install --require-hashes --only-binary=:all: -r autodoctor/requirements-test.txt
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all:
+          -r autodoctor/requirements-test.txt
       - name: Compile and validate configuration
         run: |
           python -m compileall -q autodoctor/app autodoctor/tests custom_components/autodoctor_private_resolver
