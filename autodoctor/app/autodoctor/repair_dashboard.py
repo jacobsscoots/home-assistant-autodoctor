@@ -8,6 +8,7 @@ from aiohttp import web
 
 from .audit_access import ingress_or_authenticated_qualification
 from .case_dashboard import CaseDashboard
+from .dashboard_ui import repair_approval_copy
 from .qualification import QualificationReader
 
 
@@ -158,6 +159,7 @@ class RepairDashboard(CaseDashboard):
         status = html.escape(str(plan.get("status") or "unknown"))
         risk = html.escape(str(plan.get("risk") or "unknown"))
         confidence = float(plan.get("confidence") or 0.0)
+        label, notice = repair_approval_copy(str(plan.get("repair_type") or "manual_review"))
         controls = ""
         if str(plan.get("status")) == "proposed":
             reject = (
@@ -169,7 +171,7 @@ class RepairDashboard(CaseDashboard):
                 approve = (
                     f'<form method="post" action="./api/repair-plans/{plan_id}/approve" style="display:inline;margin-right:8px">'
                     f'<input type="hidden" name="approval_nonce" value="{html.escape(self.executor.approval_nonce, quote=True)}">'
-                    '<button type="submit">Approve one config-entry reload</button></form>'
+                    f'<button type="submit">{html.escape(label)}</button></form>'
                 )
                 controls = approve + reject
             else:
@@ -181,6 +183,7 @@ class RepairDashboard(CaseDashboard):
             f'{html.escape(str(plan.get("repair_type") or "manual_review"))}</small></div>'
             '<div><small>Approval executes only the fixed, independently validated repair type shown above. '
             'The AI cannot call this endpoint or choose a different Home Assistant service.</small></div>'
+            f'<div><small>{html.escape(notice)}</small></div>'
             f'<div style="margin-top:10px">{controls}</div>'
             '</div>'
         )
