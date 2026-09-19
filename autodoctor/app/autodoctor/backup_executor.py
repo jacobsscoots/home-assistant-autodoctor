@@ -166,9 +166,29 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             await self.diagnostics.write_checked(attempt["target"], before, after)
         else:
             await self.ha.reload_config_entry(attempt["target"])
-        now = self._now()
-        await self.journal.advance(eid, "verifying", verification_started_at=now)
-        await super()._mark_verifying(plan, eid)
+        await asyncio.to_thread(self._commit_verifying, plan, eid, self._now())
+        try:
+            await self.cases.publish_case(plan["pattern_key"], force=True)
+        except Exception:
+            _LOG.warning("Repair is verifying; notification publication needs attention")
+
+    def _commit_verifying(self, plan: dict[str, Any], eid: str, now: float) -> None:
+        # Commit every recovery record together. A crash must never leave a journal
+        # saying verifying while the execution row still says executing.
+        with database_connection(self.db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            changed = db.execute(
+                "UPDATE repair_attempts SET stage='verifying', verification_started_at=? "
+                "WHERE execution_id=? AND stage='mutation_started'",
+                (now, eid),
+            ).rowcount
+            if changed != 1:
+                raise RepairBlocked("mutation_stage_changed_before_verification")
+            db.execute("UPDATE repair_executions SET status='verifying' WHERE execution_id=?", (eid,))
+            db.execute(
+                "UPDATE repair_plans SET status='verifying', executed_at=?, updated_at=? WHERE plan_id=?",
+                (now, now, plan["plan_id"]),
+            )
 
     def _mark_mutation_start(self, plan: dict[str, Any], eid: str) -> None:
         with database_connection(self.db_path) as db:
@@ -182,35 +202,35 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         current = await self.journal.get(attempt["execution_id"])
         if current is None or current["stage"] == "succeeded":
             return  # No late task/publication error may undo an already verified repair.
-        uncertain = uncertain or current["stage"] == "backup_requested"
-        mutation_uncertain = current["stage"] in {"mutation_started", "rollback_started"}
-        if rollback and plan["repair_type"] == RECIPE_TYPE and current["stage"] in {"mutation_started", "verifying", "checking"}:
+        stage = current["stage"]
+        if uncertain or stage == "backup_requested":
+            status, uncertain = "backup_uncertain", True
+        elif stage in {"mutation_started", "rollback_started"}:
+            # A lost response is not proof that the server stopped. In particular,
+            # do not race an in-flight save with a speculative rollback.
+            status, uncertain = "mutation_uncertain", True
+        elif rollback and plan["repair_type"] == RECIPE_TYPE and stage in {"verifying", "checking"}:
             status = await self._rollback(current)
-        if uncertain:
-            status = "backup_uncertain"
-        elif mutation_uncertain and status not in {"rolled_back", "failed"}:
-            uncertain = True
-            status = "mutation_uncertain"
-        elif mutation_uncertain and plan["repair_type"] != RECIPE_TYPE:
-            uncertain = True
-            status = "mutation_uncertain"
+            uncertain = status == "mutation_uncertain"
         await self.journal.advance(current["execution_id"], status, protected=1, uncertain=int(uncertain), error_code=code)
         await super()._fail_execution(plan, current["execution_id"], code, status=status)
 
     async def _rollback(self, attempt: dict[str, Any]) -> str:
         before = json.loads(attempt["preimage_json"])
         after = json.loads(attempt["postimage_json"])
+        rollback_started = False
         try:
             current = await self.diagnostics.read(attempt["target"])
             if config_digest(current) == config_digest(before):
-                return "failed"  # Save never applied; do not rewrite anything.
+                return "failed"  # Already original; do not rewrite anything.
             if config_digest(current) != config_digest(after):
                 return "conflict"  # User/intervening edit; never overwrite it.
             await self.journal.advance(attempt["execution_id"], "rollback_started")
+            rollback_started = True
             await self.diagnostics.write_checked(attempt["target"], after, before)
             return "rolled_back"
         except Exception:
-            return "conflict"
+            return "mutation_uncertain" if rollback_started else "conflict"
 
     def _schedule_verification(self, execution_id: str) -> None:
         if execution_id in self._verification_ids:
