@@ -1,0 +1,21 @@
+name: Temporary backup repair source snapshot
+on:
+  push:
+    branches: ['feat/backup-first-diagnostic-repair']
+    paths: ['.github/workflows/backup-repair-source.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: git archive --format=tar.gz --output=source.tar.gz HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: backup-repair-source
+          path: source.tar.gz
+          retention-days: 1
