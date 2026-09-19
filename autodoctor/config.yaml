@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.5.0"
+version: "0.5.1"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
@@ -68,6 +68,9 @@ options:
   repair_backup_max_size_mb: 256
   repair_backup_max_total_mb: 2048
   repair_backup_min_free_mb: 512
+  audit_log_repair_enabled: false
+  audit_log_repair_entity: ""
+  audit_log_repair_config_sha256: ""
   diagnostic_template_repair_enabled: false
   diagnostic_repair_entities: []
 schema:
@@ -110,6 +113,9 @@ schema:
   repair_backup_max_size_mb: "int(16,8192)"
   repair_backup_max_total_mb: "int(16,8192)"
   repair_backup_min_free_mb: "int(128,10240)"
+  audit_log_repair_enabled: bool
+  audit_log_repair_entity: str
+  audit_log_repair_config_sha256: str
   diagnostic_template_repair_enabled: bool
   diagnostic_repair_entities:
     - str

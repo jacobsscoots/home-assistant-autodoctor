@@ -56,7 +56,11 @@ class RepairDashboard(CaseDashboard):
                 raise web.HTTPBadRequest(text="since must be a Unix timestamp") from exc
             if since < 0:
                 raise web.HTTPBadRequest(text="since must be non-negative")
-        response = web.json_response(await self.qualification.summary(since))
+        summary = await self.qualification.summary(since)
+        planner = getattr(self.engine, "audit_log_planner", None)
+        if planner is not None:
+            summary["audit_log_recipe"] = planner.health()
+        response = web.json_response(summary)
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["X-Content-Type-Options"] = "nosniff"

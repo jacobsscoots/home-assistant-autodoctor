@@ -10,6 +10,8 @@ import sqlite3
 from typing import Any
 
 from .automatic_repair import AutoApplyRepairExecutor
+from .audit_log_client import AuditLogHAClient
+from . import audit_log_recipe
 from .database import database_connection
 from .diagnostic_recipe import DiagnosticHAClient, RECIPE_ID, RECIPE_TYPE, compile_repair
 from .repair_backup import BackupUncertain, MIB, RepairBlocked, SupervisorBackupClient, positive_size
@@ -21,12 +23,13 @@ _RECOVERABLE = {"setup_error", "setup_retry", "not_loaded"}
 
 
 class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
-    def __init__(self, settings, db_path, ha, mcp, cases, *, backup_client=None, diagnostic_client=None) -> None:
+    def __init__(self, settings, db_path, ha, mcp, cases, *, backup_client=None, diagnostic_client=None, audit_log_client=None) -> None:
         super().__init__(settings, db_path, ha, mcp, cases)
         self.settings = settings
         self.journal = RepairJournal(db_path)
         self.backups = backup_client or SupervisorBackupClient(ha.session)
         self.diagnostics = diagnostic_client or DiagnosticHAClient(ha)
+        self.audit_logs = audit_log_client or AuditLogHAClient(ha, settings)
         self.last_block_reason = ""
         self.last_cleanup_result = "not_run"
         self._verification_ids: set[str] = set()
@@ -42,6 +45,8 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             return False, "invalid_repair_confidence", None
         if not math.isfinite(confidence) or not 0.90 <= confidence <= 1:
             return False, "repair_confidence_below_threshold", None
+        if plan.get("repair_type") == audit_log_recipe.REPAIR_TYPE:
+            return audit_log_recipe.validate_plan(self.settings, plan, self.enabled)
         if plan.get("repair_type") != RECIPE_TYPE:
             return super().validate_plan(plan)
         if not self.enabled or not self.settings.diagnostic_template_repair_enabled:
@@ -80,7 +85,20 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         if self.settings.repair_backup_min_free_mb < 128:
             raise RepairBlocked("backup_free_space_reserve_too_small")
 
+    def _config_client(self, repair_type: str) -> Any | None:
+        if repair_type == audit_log_recipe.REPAIR_TYPE:
+            return self.audit_logs
+        return self.diagnostics if repair_type == RECIPE_TYPE else None
+
     async def _preconditions(self, plan, target) -> tuple[dict[str, Any], dict[str, Any]]:
+        if plan["repair_type"] == audit_log_recipe.REPAIR_TYPE:
+            change = self._plan_change(plan)
+            config_id, before = await self.audit_logs.resolve()
+            after = audit_log_recipe.reviewed_patch(self.settings, before)
+            if (config_id != target or config_digest(before) != change["before_digest"]
+                    or config_digest(after) != change["after_digest"]):
+                raise RepairBlocked("audit_log_target_or_config_changed")
+            return before, after
         if plan["repair_type"] == RECIPE_TYPE:
             change = self._plan_change(plan)
             config_id, before = await self.diagnostics.resolve(change["entity_id"])
@@ -162,8 +180,9 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             marker=self.journal.marker(latest), max_bytes=self.settings.repair_backup_max_size_mb * MIB,
         )
         await asyncio.to_thread(self._mark_mutation_start, plan, eid)
-        if plan["repair_type"] == RECIPE_TYPE:
-            await self.diagnostics.write_checked(attempt["target"], before, after)
+        client = self._config_client(plan["repair_type"])
+        if client is not None:
+            await client.write_checked(attempt["target"], before, after)
         else:
             await self.ha.reload_config_entry(attempt["target"])
         await asyncio.to_thread(self._commit_verifying, plan, eid, self._now())
@@ -209,7 +228,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             # A lost response is not proof that the server stopped. In particular,
             # do not race an in-flight save with a speculative rollback.
             status, uncertain = "mutation_uncertain", True
-        elif rollback and plan["repair_type"] == RECIPE_TYPE and stage in {"verifying", "checking"}:
+        elif rollback and self._config_client(plan["repair_type"]) is not None and stage in {"verifying", "checking"}:
             status = await self._rollback(current)
             uncertain = status == "mutation_uncertain"
         await self.journal.advance(current["execution_id"], status, protected=1, uncertain=int(uncertain), error_code=code)
@@ -219,15 +238,16 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         before = json.loads(attempt["preimage_json"])
         after = json.loads(attempt["postimage_json"])
         rollback_started = False
+        client = self._config_client(attempt["repair_type"])
         try:
-            current = await self.diagnostics.read(attempt["target"])
+            current = await client.read(attempt["target"])
             if config_digest(current) == config_digest(before):
                 return "failed"  # Already original; do not rewrite anything.
             if config_digest(current) != config_digest(after):
                 return "conflict"  # User/intervening edit; never overwrite it.
             await self.journal.advance(attempt["execution_id"], "rollback_started")
             rollback_started = True
-            await self.diagnostics.write_checked(attempt["target"], after, before)
+            await client.write_checked(attempt["target"], after, before)
             return "rolled_back"
         except Exception:
             return "mutation_uncertain" if rollback_started else "conflict"
@@ -271,6 +291,15 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         if remaining:
             await asyncio.sleep(remaining)
         await self._verify_execution(execution_id)
+        # The encoding recipe needs a natural formerly-failing payload. Preserve the
+        # minimum verification window and wait at most 15 minutes for that evidence.
+        if attempt["repair_type"] == audit_log_recipe.REPAIR_TYPE:
+            while True:
+                current = await self.journal.get(execution_id)
+                if current is None or current["stage"] != "verifying":
+                    break
+                await asyncio.sleep(15)
+                await self._verify_execution(execution_id)
 
     async def _verify_execution(self, execution_id: str) -> None:
         attempt = await self.journal.get(execution_id)
@@ -295,6 +324,9 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
                 committed = await asyncio.to_thread(self._commit_verified_success, plan, attempt, evidence)
                 if not committed:
                     raise RepairBlocked("incident_recurred_after_mutation")
+            elif (plan["repair_type"] == audit_log_recipe.REPAIR_TYPE
+                  and self._now() < attempt["verification_started_at"] + max(900, self.verification_seconds)):
+                await self.journal.advance(execution_id, "verifying")
             else:
                 await self._abort(plan, attempt, "verification_inconclusive_no_success_claim", status="verification_inconclusive", rollback=False)
         except asyncio.CancelledError:
@@ -318,21 +350,27 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         row = db.execute("SELECT occurrences FROM incident_cases WHERE pattern_key=?", (plan["pattern_key"],)).fetchone()
         if row is None or row[0] != attempt["baseline_occurrences"]:
             return True
-        if plan["repair_type"] == RECIPE_TYPE:
+        if plan["repair_type"] in {RECIPE_TYPE, audit_log_recipe.REPAIR_TYPE}:
             change = plan["proposed_changes"][0]
-            logger = "homeassistant.components." + change["entity_id"]
+            origin = "script." + attempt["target"] if plan["repair_type"] == audit_log_recipe.REPAIR_TYPE else change["entity_id"]
+            logger = "homeassistant.components." + origin
             since = db.execute("SELECT started_at FROM repair_executions WHERE execution_id=?", (attempt["execution_id"],)).fetchone()[0]
             return db.execute("SELECT 1 FROM incidents WHERE name=? AND last_seen>=? LIMIT 1", (logger, since)).fetchone() is not None
         return False
 
     async def _verification_evidence(self, plan, attempt) -> tuple[bool, dict[str, Any]]:
-        if plan["repair_type"] == RECIPE_TYPE:
+        if plan["repair_type"] in {RECIPE_TYPE, audit_log_recipe.REPAIR_TYPE}:
+            client = self._config_client(plan["repair_type"])
             after = json.loads(attempt["postimage_json"])
-            current = await self.diagnostics.read(attempt["target"])
+            current = await client.read(attempt["target"])
             if config_digest(current) != config_digest(after):
                 raise RepairBlocked("diagnostic_config_changed_during_verification")
-            evidence = {"recipe_id": RECIPE_ID, "postimage_matches": True,
-                        "natural_run_verified": await self.diagnostics.natural_run_verified(attempt["target"], attempt["verification_started_at"], after)}
+            evidence = {"recipe_id": audit_log_recipe.RECIPE_ID if plan["repair_type"] == audit_log_recipe.REPAIR_TYPE else RECIPE_ID,
+                        "postimage_matches": True,
+                        "natural_run_verified": await client.natural_run_verified(attempt["target"], attempt["verification_started_at"], after)}
+            if plan["repair_type"] == audit_log_recipe.REPAIR_TYPE:
+                evidence["verification_scope"] = "formerly-failing JSON encoded intact in natural shell argument"
+                evidence["log_append_verified"] = False
             return evidence["natural_run_verified"], evidence
         entry = await self.ha.get_config_entry_status(attempt["target"])
         if entry.get("entry_id") != attempt["target"]:
@@ -369,10 +407,13 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='knowledge_fts'").fetchone()
             if exists:
                 db.execute("UPDATE knowledge_fts SET verification=? WHERE memory_key=?", (verification, "repair:" + plan["plan_id"]))
-        if plan["repair_type"] == RECIPE_TYPE:
+        if plan["repair_type"] in {RECIPE_TYPE, audit_log_recipe.REPAIR_TYPE}:
             resolution = "Compiled diagnostic log-message guard applied; no control actions, triggers or conditions were changed."
             verification = "Stored postimage matched and a natural diagnostic run completed; no case recurrence in the verification window."
-            db.execute("UPDATE knowledge SET source='autodoctor-compiled-repair',resolution=?,verification=?,metadata_json=? WHERE memory_key=?", (resolution, verification, json.dumps({"repair_type": RECIPE_TYPE, "verification": evidence}), "repair:" + plan["plan_id"]))
+            if plan["repair_type"] == audit_log_recipe.REPAIR_TYPE:
+                resolution = "Combined JSON serialization and Base64 encoding; payload and shell command unchanged."
+                verification = "Natural previously-failing input encoded intact; source matched and no origin/case recurrence. Log append was not independently verified."
+            db.execute("UPDATE knowledge SET source='autodoctor-compiled-repair',resolution=?,verification=?,metadata_json=? WHERE memory_key=?", (resolution, verification, json.dumps({"repair_type": plan["repair_type"], "verification": evidence}), "repair:" + plan["plan_id"]))
             exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='knowledge_fts'").fetchone()
             if exists:
                 db.execute("UPDATE knowledge_fts SET resolution=?,verification=? WHERE memory_key=?", (resolution, verification, "repair:" + plan["plan_id"]))
@@ -397,7 +438,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
 
     async def health(self) -> dict[str, Any]:
         data = await super().health()
-        data["supported_repairs"] = ["reload_config_entry", RECIPE_TYPE]
+        data["supported_repairs"] = ["reload_config_entry", RECIPE_TYPE, audit_log_recipe.REPAIR_TYPE]
         data["backup_safety"] = {
             **await self.journal.health(), "required": True,
             "password_configured": isinstance(self.settings.repair_backup_password, str) and len(self.settings.repair_backup_password) >= 12,

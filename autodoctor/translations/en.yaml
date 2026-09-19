@@ -106,3 +106,12 @@ configuration:
       remain mandatory: executor enabled, low risk, confidence at least 0.90, exactly one validated
       config-entry target, allowlisted reload operation, and post-repair verification. Older pending plans
       are never auto-applied after enabling or restarting.
+  audit_log_repair_enabled:
+    name: Enable reviewed JSON/Base64 logger repair
+    description: Opt-in fixed recipe for one reviewed append-only logger. Requires exact entity and current config digest, backup setup, idle script and fresh matching errors.
+  audit_log_repair_entity:
+    name: Reviewed logger script entity
+    description: Exact live script entity approved after reviewing its unchanged append-only shell helper. No caller automations are enrolled.
+  audit_log_repair_config_sha256:
+    name: Approved logger configuration digest
+    description: SHA-256 from AutoDoctor config_digest of the matching loaded/native-editor configuration. A change requires a new review; keep the digest local.

@@ -9,6 +9,20 @@ fail-closed. Automatic repairs are disabled by default. With the repair executor
 deterministic allowlist requires individual ingress approval unless low-risk auto-apply is explicitly
 enabled; automatic execution must pass the same validation and post-repair verification gates.
 
+## v0.5.1 reviewed logger JSON/Base64 repair
+
+- Adds a separate opt-in, full-config-digest-bound recipe for the reproduced intermediate
+  JSON `Wrapper` / Base64 fault. The patch removes `json_line` and chains `to_json` directly
+  into `base64_encode`; caller/package automations and shell commands are unchanged.
+- Reuses confirmed pre-repair backups, owned-backup retention and durable safety holds.
+- Native identity, source and idle checks; verification waits for a natural formerly-failing
+  payload, without claiming an independently verified log-file append.
+- Exposes aggregate recovery-hold status through the existing authenticated qualification
+  route, keeping the dashboard ingress-only.
+
+Read [activation, strict prerequisites and reload limitations](autodoctor/AUDIT_LOG_REPAIR.md).
+All new enrollment settings are empty/off by default; existing options are preserved.
+
 ## v0.5.0 backup-first production repairs
 
 - All new automatic/manual repairs require a confirmed encrypted partial HA configuration backup.

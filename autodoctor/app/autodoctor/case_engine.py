@@ -66,6 +66,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         self.private_target_withheld = 0
         self.private_target_last_result = ""
         self.diagnostic_planner = None
+        self.audit_log_planner = None
         self.backlog_triage_last_run_at: float | None = None
         self.backlog_triage_last_error = ""
         self.nonfatal_events_suppressed = 0
@@ -155,6 +156,22 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         async with self._analysis_claim_lock:
             self._patterns_in_analysis.discard(pattern_key)
 
+    async def _consider_compiled_repairs(self, event, fp, pattern_key, row) -> bool:
+        planners = [planner for planner in (self.audit_log_planner, self.diagnostic_planner) if planner is not None]
+        if not planners:
+            return False
+        # Share the pattern claim with AI/backlog triage. An in-flight diagnosis may
+        # otherwise overwrite a compiled plan between the event and execution.
+        if not await self._claim_pattern(pattern_key):
+            return True
+        try:
+            for planner in planners:
+                if await planner.consider(event, fp, pattern_key, row):
+                    return True
+            return False
+        finally:
+            await self._release_pattern(pattern_key)
+
     async def _ensure_nonfatal_suppressed(self, pattern_key: str, reason: str) -> bool:
         """Return True when a matching observation is safely in suppressed state.
 
@@ -203,9 +220,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
 
         if _case.get("status") in {"repair_available", "verifying"}:
             return  # Preserve active repair state; new incident evidence was still recorded.
-        if self.diagnostic_planner is not None:
-            if await self.diagnostic_planner.consider(event, fp, pattern_key, row):
-                return
+        if await self._consider_compiled_repairs(event, fp, pattern_key, row):
+            return
         if isinstance(self.llm, NoProvider):
             return
         if not await self._should_analyze(event, row, family):
@@ -236,6 +252,9 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         usage_id: int | None = None
         provider_started = False
         try:
+            current_case = await self.cases.get_case(pattern_key)
+            if current_case and current_case.get("status") in {"repair_available", "verifying"}:
+                return False
             prompt = await self._prepare_prompt(
                 event,
                 fp=fp,
@@ -582,6 +601,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             "last_error": self.backlog_triage_last_error,
             "in_flight_patterns": len(self._patterns_in_analysis),
         }
+        if self.audit_log_planner is not None:
+            case_health["audit_log_recipe"] = self.audit_log_planner.health()
         if self.diagnostic_planner is not None:
             case_health["diagnostic_recipe"] = self.diagnostic_planner.health()
         health["case_management"] = case_health

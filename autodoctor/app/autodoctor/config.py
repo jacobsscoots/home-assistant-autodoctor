@@ -46,6 +46,9 @@ class Settings:
     repair_backup_max_size_mb: int = 256
     repair_backup_max_total_mb: int = 2048
     repair_backup_min_free_mb: int = 512
+    audit_log_repair_enabled: bool = False
+    audit_log_repair_entity: str = ""
+    audit_log_repair_config_sha256: str = ""
     diagnostic_template_repair_enabled: bool = False
     diagnostic_repair_entities: list[str] = field(default_factory=list)
 

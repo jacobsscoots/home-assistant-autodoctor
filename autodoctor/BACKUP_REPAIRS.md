@@ -1,4 +1,9 @@
-# Backup-first repairs (v0.5.0)
+# Backup-first repairs (v0.5.0+)
+
+For the separate opt-in JSON/Base64 logger recipe added in v0.5.1, see
+[AUDIT_LOG_REPAIR.md](AUDIT_LOG_REPAIR.md). Its script-specific verification can wait
+up to 15 minutes for a natural formerly-failing payload; the rules below describe
+the original integration and diagnostic-automation paths.
 
 ## Scope and one-time setup
 
