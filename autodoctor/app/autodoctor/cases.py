@@ -312,6 +312,9 @@ class IncidentCaseManager:
         analysis: Analysis,
         evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        current = await self.get_case(pattern_key)
+        if current and current.get("status") == "verifying":
+            return None
         plan = None
         status = "diagnosed"
         if analysis.action == "propose_fix" and analysis.proposed_changes:
@@ -342,6 +345,8 @@ class IncidentCaseManager:
             for change in analysis.proposed_changes
             if isinstance(change, dict)
         }
+        if operations == {"diagnostic_log_template"}:
+            return "diagnostic_log_template"
         if operations & {"reload_config_entry", "reload_integration"}:
             return "reload_config_entry"
         return "manual_review"

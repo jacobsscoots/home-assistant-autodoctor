@@ -65,6 +65,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         self.private_target_bindings = 0
         self.private_target_withheld = 0
         self.private_target_last_result = ""
+        self.diagnostic_planner = None
         self.backlog_triage_last_run_at: float | None = None
         self.backlog_triage_last_error = ""
         self.nonfatal_events_suppressed = 0
@@ -200,6 +201,11 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             force=is_new_case or reopened_from_suppression,
         )
 
+        if _case.get("status") in {"repair_available", "verifying"}:
+            return  # Preserve active repair state; new incident evidence was still recorded.
+        if self.diagnostic_planner is not None:
+            if await self.diagnostic_planner.consider(event, fp, pattern_key, row):
+                return
         if isinstance(self.llm, NoProvider):
             return
         if not await self._should_analyze(event, row, family):
@@ -576,5 +582,7 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             "last_error": self.backlog_triage_last_error,
             "in_flight_patterns": len(self._patterns_in_analysis),
         }
+        if self.diagnostic_planner is not None:
+            case_health["diagnostic_recipe"] = self.diagnostic_planner.health()
         health["case_management"] = case_health
         return health

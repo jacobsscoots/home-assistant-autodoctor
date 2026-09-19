@@ -55,11 +55,14 @@ def test_state_sanitizer_redacts_sensitive_state_shapes() -> None:
     assert "192.168.1.5" not in sanitized
 
 
-def test_app_does_not_request_unused_supervisor_api_permission() -> None:
+def test_app_requests_only_the_backup_supervisor_role() -> None:
     config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
     assert config["homeassistant_api"] is True
-    assert "hassio_api" not in config
-    assert "hassio_role" not in config
+    assert config["hassio_api"] is True
+    assert config["hassio_role"] == "backup"
+    assert "map" not in config
+    assert "docker_api" not in config
+    assert "full_access" not in config
 
 
 def test_incident_retention_and_open_count_are_bounded(tmp_path: Path) -> None:

@@ -25,4 +25,7 @@ class AutomaticControlDashboard(ControlDashboard):
             '<div><div class="k">Repair executor</div><div class="v">ON — automatic low-risk + manual approval</div></div>',
             1,
         )
+        safety = executor_health.get("backup_safety")
+        if safety and (not safety.get("password_configured") or safety.get("uncertain_attempts")):
+            text = text.replace("ON — validated low-risk only", "ARMED — blocked by backup/recovery setup")
         return web.Response(text=text, content_type="text/html")

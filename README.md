@@ -9,6 +9,20 @@ fail-closed. Automatic repairs are disabled by default. With the repair executor
 deterministic allowlist requires individual ingress approval unless low-risk auto-apply is explicitly
 enabled; automatic execution must pass the same validation and post-repair verification gates.
 
+## v0.5.0 backup-first production repairs
+
+- All new automatic/manual repairs require a confirmed encrypted partial HA configuration backup.
+- Keep two owned recovery points per target/type; preserve ordinary backups and pin failed or
+  uncertain recovery points. Global single-flight claims, cooldowns and bounded storage checks.
+- Add one explicitly enrolled, compiled log-only diagnostic template recipe with target readback,
+  natural-run verification and conflict-aware target rollback; no model-authored YAML patches.
+- Production monitoring/MCP remains read-only; write access uses fixed native endpoints with the
+  Supervisor backup role. Missing setup blocks repairs rather than silently running unbacked.
+
+Read [backup setup, retention, recovery holds and concurrent-edit limitations](autodoctor/BACKUP_REPAIRS.md).
+The recipe is opt-in with an empty target list. No live diagnostic target has been enrolled by
+this release. Install manually only after the release checks pass; keep auto-update OFF.
+
 ## v0.4.17 dependency-install hardening and test clarity
 
 - Requires hash-checked prebuilt wheels for CI and container dependency installation. Missing

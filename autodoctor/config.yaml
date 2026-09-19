@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.4.17"
+version: "0.5.0"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
@@ -22,6 +22,8 @@ arch:
   - amd64
   - aarch64
 homeassistant_api: true
+hassio_api: true
+hassio_role: backup
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:doctor
@@ -61,6 +63,13 @@ options:
   repair_executor_enabled: false
   repair_verification_seconds: 120
   auto_apply_low_risk: false
+  repair_backup_password: ""
+  repair_backup_keep: 2
+  repair_backup_max_size_mb: 256
+  repair_backup_max_total_mb: 2048
+  repair_backup_min_free_mb: 512
+  diagnostic_template_repair_enabled: false
+  diagnostic_repair_entities: []
 schema:
   min_level: "list(WARNING|ERROR)"
   min_occurrences_for_ai: "int(1,20)"
@@ -96,3 +105,11 @@ schema:
   repair_executor_enabled: bool
   repair_verification_seconds: "int(30,3600)"
   auto_apply_low_risk: bool
+  repair_backup_password: password
+  repair_backup_keep: "int(1,2)"
+  repair_backup_max_size_mb: "int(16,8192)"
+  repair_backup_max_total_mb: "int(16,8192)"
+  repair_backup_min_free_mb: "int(128,10240)"
+  diagnostic_template_repair_enabled: bool
+  diagnostic_repair_entities:
+    - str
