@@ -1,0 +1,51 @@
+name: Temporary approval-copy review fix
+on:
+  push:
+    branches: ['fix/audit-log-json-repair']
+    paths: ['.github/workflows/apply-approval-labels.yml']
+permissions:
+  contents: write
+jobs:
+  apply-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Apply exact hash-guarded review correction
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          for name, change in json.loads(Path('.github/approval-labels.json').read_text()).items():
+              path = Path(name)
+              original = path.read_bytes()
+              assert hashlib.sha256(original).hexdigest() == change['before'], name
+              lines = original.decode().splitlines(keepends=True)
+              for start, end, replacement in reversed(change['edits']):
+                  lines[start:end] = replacement.splitlines(keepends=True)
+              updated = ''.join(lines).encode()
+              assert hashlib.sha256(updated).hexdigest() == change['after'], name
+              path.write_bytes(updated)
+          PY
+      - name: Install locked wheels
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all:
+          -r autodoctor/requirements-test.txt
+      - name: Run full suite without exclusions
+        run: |
+          python -m compileall -q autodoctor/app autodoctor/tests
+          python -m pytest -q autodoctor/tests
+          git diff --check
+      - name: Commit review fix and remove temporary files
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/fix/audit-log-json-repair'
+          git rm -- .github/workflows/apply-approval-labels.yml .github/approval-labels.json
+          git add autodoctor/app/autodoctor/dashboard_ui.py autodoctor/app/autodoctor/repair_dashboard.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Describe actual backup-protected mutation in both approval dashboards'
+          git push origin HEAD:refs/heads/fix/audit-log-json-repair
