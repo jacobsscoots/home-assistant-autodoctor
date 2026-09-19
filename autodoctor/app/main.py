@@ -6,6 +6,7 @@ import os
 
 from autodoctor import AUTODOCTOR_VERSION
 from autodoctor.backup_executor import BackupFirstRepairExecutor
+from autodoctor.audit_log_planner import AuditLogRepairPlanner
 from autodoctor.diagnostic_planner import DiagnosticRepairPlanner
 
 from autodoctor.ai_usage_recovery import recover_orphaned_ai_usage
@@ -43,6 +44,7 @@ async def async_main() -> None:
     engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
     executor = BackupFirstRepairExecutor(settings, store.path, ha, mcp, engine.cases)
     engine.diagnostic_planner = DiagnosticRepairPlanner(settings, engine.cases, executor.diagnostics)
+    engine.audit_log_planner = AuditLogRepairPlanner(settings, engine.cases, executor.audit_logs)
     automatic_repairs = AutomaticRepairCoordinator(settings, engine.cases, executor)
     dashboard = AutomaticControlDashboard(settings, store, engine, executor)
 

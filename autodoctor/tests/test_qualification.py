@@ -56,3 +56,35 @@ def test_qualification_summary_is_authoritative_and_read_only(tmp_path: Path) ->
             assert db.execute("SELECT COUNT(*) FROM repair_executions").fetchone()[0] == 2
 
     asyncio.run(run())
+
+
+def test_missing_recovery_journal_is_unknown_not_clear(tmp_path):
+    async def run():
+        path = tmp_path / "legacy.db"
+        with sqlite3.connect(path) as db:
+            db.executescript(SCHEMA)
+        result = await QualificationReader(str(path)).summary()
+        safety = result["repair_safety"]
+        assert safety["journal_available"] is False
+        assert safety["uncertain_attempts"] is None
+        assert safety["target_holds"] is None
+    asyncio.run(run())
+
+
+def test_recovery_summary_exposes_only_aggregate_counts(tmp_path):
+    async def run():
+        path = tmp_path / "new.db"
+        with sqlite3.connect(path) as db:
+            db.executescript(SCHEMA + "CREATE TABLE repair_attempts (target_key TEXT, stage TEXT, uncertain INTEGER, preimage_json TEXT);")
+            db.executemany("INSERT INTO repair_attempts VALUES (?,?,?,?)", [
+                ("private-a", "failed", 0, "private config"),
+                ("private-a", "rolled_back", 0, "private config"),
+                ("private-b", "mutation_uncertain", 1, "private config"),
+            ])
+            db.execute("INSERT INTO repair_executions VALUES ('e','verifying')")
+        result = await QualificationReader(str(path)).summary()
+        assert result["repair_safety"] == {"journal_available": True, "uncertain_attempts": 1, "target_holds": 2, "active_executions": 1}
+        assert "private" not in str(result)
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT COUNT(*) FROM repair_attempts").fetchone()[0] == 3
+    asyncio.run(run())

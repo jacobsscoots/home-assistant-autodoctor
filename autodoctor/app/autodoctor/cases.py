@@ -315,6 +315,8 @@ class IncidentCaseManager:
         current = await self.get_case(pattern_key)
         if current and current.get("status") == "verifying":
             return None
+        if current and current.get("status") == "repair_available" and analysis.action != "propose_fix":
+            return None  # A late observation must not erase an awaiting repair proposal.
         plan = None
         status = "diagnosed"
         if analysis.action == "propose_fix" and analysis.proposed_changes:
@@ -345,6 +347,8 @@ class IncidentCaseManager:
             for change in analysis.proposed_changes
             if isinstance(change, dict)
         }
+        if operations == {"script_json_base64"}:
+            return "script_json_base64"
         if operations == {"diagnostic_log_template"}:
             return "diagnostic_log_template"
         if operations & {"reload_config_entry", "reload_integration"}:

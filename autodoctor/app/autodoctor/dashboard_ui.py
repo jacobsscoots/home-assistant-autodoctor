@@ -128,6 +128,29 @@ def _case_card(case: dict[str, Any], approval_nonce: str) -> str:
     )
 
 
+def repair_approval_copy(repair_type: str) -> tuple[str, str]:
+    """Describe the actual fixed mutation on both manual approval surfaces."""
+    labels = {
+        "reload_config_entry": (
+            "Approve one config-entry reload",
+            "Creates a confirmed pre-repair backup before reloading one integration entry.",
+        ),
+        "diagnostic_log_template": (
+            "Approve diagnostic automation edit",
+            "Creates a confirmed backup, saves the displayed automation template change, and reloads that automation.",
+        ),
+        "script_json_base64": (
+            "Approve logger script edit and reload",
+            "Creates a confirmed backup, saves the encoding change and requests script reload. "
+            "The editor rewrites scripts.yaml; an in-flight logger run may be cancelled.",
+        ),
+    }
+    return labels.get(repair_type, (
+        "Approve validated repair",
+        "Executes only the validated repair type shown above after a confirmed backup.",
+    ))
+
+
 def _repair_card(plan: dict[str, Any], executor: Any, approval_nonce: str) -> str:
     plan_id = str(plan.get("plan_id") or "")
     allowed, reason, _target = executor.validate_plan(plan)
@@ -135,6 +158,7 @@ def _repair_card(plan: dict[str, Any], executor: Any, approval_nonce: str) -> st
     risk = str(plan.get("risk") or "unknown")
     summary = _safe_text(plan.get("summary") or "Repair plan awaiting review.", 800)
     repair_type = _safe_text(plan.get("repair_type") or "manual_review", 100)
+    label, notice = repair_approval_copy(str(plan.get("repair_type") or "manual_review"))
 
     reject = (
         f'<form method="post" action="./api/repair-plans/{_esc(plan_id, quote=True)}/reject">'
@@ -146,7 +170,7 @@ def _repair_card(plan: dict[str, Any], executor: Any, approval_nonce: str) -> st
         approve = (
             f'<form method="post" action="./api/repair-plans/{_esc(plan_id, quote=True)}/approve">'
             f'<input type="hidden" name="approval_nonce" value="{_esc(approval_nonce, quote=True)}">'
-            '<button class="button button--primary" type="submit">Approve one config-entry reload</button></form>'
+            f'<button class="button button--primary" type="submit">{_esc(label)}</button></form>'
         )
     else:
         approve = f'<div class="repair__reason">Not executable: {_safe_text(reason, 240)}</div>'
@@ -160,6 +184,7 @@ def _repair_card(plan: dict[str, Any], executor: Any, approval_nonce: str) -> st
         f'<p class="repair__summary">{summary}</p>'
         '<p class="repair__guardrail">Approval can execute only the independently validated fixed repair shown here. '
         'The AI cannot call this endpoint or select another Home Assistant service.</p>'
+        f'<p class="repair__guardrail">{_esc(notice)}</p>'
         f'<div class="repair__actions">{approve}{reject}</div>'
         '</article>'
     )

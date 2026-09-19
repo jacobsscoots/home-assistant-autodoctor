@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .database import database_connection
+from .repair_journal import _FAILED
 
 
 class QualificationReader:
@@ -24,6 +25,7 @@ class QualificationReader:
                 "SELECT status, COUNT(*) FROM incident_cases GROUP BY status"
             ).fetchall()
             cases_by_status = {str(status): int(count) for status, count in case_rows}
+            repair_safety = self._repair_safety(db)
             repair_plans = int(db.execute("SELECT COUNT(*) FROM repair_plans").fetchone()[0])
             repair_executions = int(
                 db.execute("SELECT COUNT(*) FROM repair_executions").fetchone()[0]
@@ -54,6 +56,7 @@ class QualificationReader:
                 )
 
         return {
+            "repair_safety": repair_safety,
             "generated_at": now.timestamp(),
             "since": since,
             "cases_total": sum(cases_by_status.values()),
@@ -67,3 +70,25 @@ class QualificationReader:
             "ai_spend_month_usd": month_spend,
             "ai_spend_since_usd": since_spend,
         }
+
+    @staticmethod
+    def _repair_safety(db) -> dict[str, Any]:
+        """Whitelisted aggregate recovery status for the existing authenticated route.
+
+        No configurations, entity IDs, backup metadata or passwords leave this reader.
+        Older schemas report unavailable, never a fabricated zero-hold result.
+        """
+        executions = dict(db.execute("SELECT status, COUNT(*) FROM repair_executions GROUP BY status"))
+        status: dict[str, Any] = {
+            "journal_available": False, "uncertain_attempts": None, "target_holds": None,
+            "active_executions": sum(int(executions.get(key, 0)) for key in ("executing", "verifying")),
+        }
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='repair_attempts'").fetchone():
+            return status
+        rows = db.execute("SELECT target_key, stage, uncertain FROM repair_attempts").fetchall()
+        status.update(
+            journal_available=True,
+            uncertain_attempts=sum(bool(row[2]) for row in rows),
+            target_holds=len({row[0] for row in rows if row[1] in _FAILED}),
+        )
+        return status
