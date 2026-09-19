@@ -104,6 +104,46 @@ class HomeAssistantClient:
             response.raise_for_status()
             return await response.json()
 
+    async def _repair_read(self, payload: dict[str, Any]) -> Any:
+        async with self.session.ws_connect(self.ws_url, heartbeat=30, timeout=_HA_WS_TIMEOUT) as ws:
+            hello = await self._receive_handshake_json(ws)
+            if hello.get("type") != "auth_required":
+                raise RuntimeError("repair read handshake failed")
+            await ws.send_json({"type": "auth", "access_token": self.token})
+            if (await self._receive_handshake_json(ws)).get("type") != "auth_ok":
+                raise RuntimeError("repair read authentication failed")
+            await ws.send_json({"id": 1, **payload})
+            result = await self._receive_handshake_json(ws)
+        if result.get("id") != 1 or result.get("success") is not True:
+            raise RuntimeError("repair read unavailable")
+        return result.get("result")
+
+    async def get_config_entry_status(self, entry_id: str) -> dict[str, Any]:
+        if not _CONFIG_ENTRY_ID.fullmatch(entry_id):
+            raise ValueError("invalid config-entry identifier")
+        result = await self._repair_read({"type": "config_entries/get_single", "entry_id": entry_id})
+        entry = result.get("config_entry") if isinstance(result, dict) else None
+        if not isinstance(entry, dict) or entry.get("entry_id") != entry_id:
+            raise RuntimeError("repair read target mismatch")
+        return {key: entry.get(key) for key in ("entry_id", "state", "domain", "disabled_by")}
+
+    async def read_automation_traces(self, config_id: str) -> list[dict[str, Any]]:
+        from .repair_backup import valid_id
+        result = await self._repair_read({"type": "trace/list", "domain": "automation", "item_id": valid_id(config_id)})
+        if not isinstance(result, list):
+            raise RuntimeError("automation trace evidence unavailable")
+        return [item for item in result if isinstance(item, dict)][:20]
+
+    async def read_automation_trace(self, config_id: str, run_id: str) -> dict[str, Any]:
+        from .repair_backup import valid_id
+        result = await self._repair_read({
+            "type": "trace/get", "domain": "automation",
+            "item_id": valid_id(config_id), "run_id": valid_id(run_id),
+        })
+        if not isinstance(result, dict):
+            raise RuntimeError("automation trace details unavailable")
+        return result
+
     async def get_version(self) -> str:
         """Return the live HA Core version without reading configuration files."""
         async with self.session.get(f"{self.api_base}/config") as response:

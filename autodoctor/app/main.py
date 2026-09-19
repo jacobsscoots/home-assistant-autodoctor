@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+
+from autodoctor import AUTODOCTOR_VERSION
+from autodoctor.backup_executor import BackupFirstRepairExecutor
+from autodoctor.diagnostic_planner import DiagnosticRepairPlanner
 
 from autodoctor.ai_usage_recovery import recover_orphaned_ai_usage
 from autodoctor.automatic_dashboard import AutomaticControlDashboard
-from autodoctor.automatic_repair import AutoApplyRepairExecutor, AutomaticRepairCoordinator
+from autodoctor.automatic_repair import AutomaticRepairCoordinator
 from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
 from autodoctor.ha import HomeAssistantClient
@@ -18,6 +23,7 @@ from autodoctor.transport_logging import suppress_sensitive_http_transport_logs
 
 
 async def async_main() -> None:
+    os.umask(0o077)  # Private configuration preimages and new database files.
     settings = Settings.load()
     logging.basicConfig(
         level=logging.INFO,
@@ -35,11 +41,14 @@ async def async_main() -> None:
     llm = build_provider(settings)
     mcp = MCPBackend(settings)
     engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
-    executor = AutoApplyRepairExecutor(settings, store.path, ha, mcp, engine.cases)
+    executor = BackupFirstRepairExecutor(settings, store.path, ha, mcp, engine.cases)
+    engine.diagnostic_planner = DiagnosticRepairPlanner(settings, engine.cases, executor.diagnostics)
     automatic_repairs = AutomaticRepairCoordinator(settings, engine.cases, executor)
     dashboard = AutomaticControlDashboard(settings, store, engine, executor)
 
     await store.initialize()
+    os.chmod(store.path, 0o600)
+    logging.getLogger(__name__).info("AutoDoctor %s starting; new repairs require confirmed backups", AUTODOCTOR_VERSION)
     ai_usage_recovery = await recover_orphaned_ai_usage(store.path)
     await mcp.start()
     reconciliation = await engine.initialize_case_management()
@@ -48,6 +57,8 @@ async def async_main() -> None:
     reconciliation["ai_usage_recovery"] = ai_usage_recovery.as_dict()
     engine.backlog_reconciliation = dict(reconciliation)
     await executor.initialize()
+    if settings.repair_executor_enabled and len(settings.repair_backup_password) < 12:
+        logging.getLogger(__name__).warning("New repairs blocked: configure a repair backup password of at least 12 characters and save it outside HA")
     resumed = await executor.resume_pending_verifications()
     logging.getLogger(__name__).info(
         "Case backlog reconciliation complete: cases=%s legacy_notifications_dismissed=%s "

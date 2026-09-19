@@ -225,18 +225,13 @@ it only for connectivity/capability discovery and deliberately does not request 
 configuration because Home Assistant entity IDs and upstream MCP configuration identifiers are
 different shapes.
 
-## Planned safe executor gate
+## Implemented backup-first executor (v0.5.0)
 
-A future repair can only move from proposal to application if all gates pass:
+The production executor supports the existing narrowly validated integration reload and
+one explicitly enrolled diagnostic-log template recipe. Every newly started repair now
+requires a confirmed encrypted partial HA backup. See [BACKUP_REPAIRS.md](BACKUP_REPAIRS.md)
+for setup, retention, recovery holds, verification and the native API concurrent-edit limit.
 
-1. Evidence is sufficient and the live target is unambiguous.
-2. Risk policy classifies the repair as eligible.
-3. MCP backup succeeds.
-4. The smallest patch is applied.
-5. Home Assistant configuration validation succeeds.
-6. The original fingerprint is observed for a verification window.
-7. Any validation/regression failure invokes MCP restore.
-
-Presence, sleep, climate, power shutdown, locks/security, credentials, database changes,
-deletions, and broad automation behaviour remain approval-required even after auto-apply is
-introduced.
+Generic YAML/code editing, automatic full-system restore and broad repair permissions are
+not implemented. Presence, sleep, climate, power shutdown, locks/security, credentials,
+database changes and broad automation behaviour remain outside unattended repair.

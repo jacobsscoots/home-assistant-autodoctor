@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
@@ -41,6 +41,13 @@ class Settings:
     repair_executor_enabled: bool = False
     repair_verification_seconds: int = 120
     auto_apply_low_risk: bool = False
+    repair_backup_password: str = field(default="", repr=False)
+    repair_backup_keep: int = 2
+    repair_backup_max_size_mb: int = 256
+    repair_backup_max_total_mb: int = 2048
+    repair_backup_min_free_mb: int = 512
+    diagnostic_template_repair_enabled: bool = False
+    diagnostic_repair_entities: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str = "/data/options.json") -> "Settings":

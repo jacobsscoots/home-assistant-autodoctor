@@ -81,6 +81,14 @@ class LifecycleIncidentCaseManager(IncidentCaseManager):
             ).fetchall()
         return [dict(row) for row in rows]
 
+    async def publish_case(self, pattern_key: str, *, force: bool = False) -> bool:
+        """Synchronize the notice after an atomic status update, without rewriting status."""
+        case = await self.get_case(pattern_key)
+        if case and case.get("status") in _INACTIVE_NOTIFICATION_STATUSES:
+            await self._dismiss_owned_notification(pattern_key, case)
+            return False
+        return await super().publish_case(pattern_key, force=force)
+
     async def publish_active_cases(self, *, force: bool = False) -> int:
         async with self._lock:
             cases = await asyncio.to_thread(self._active_notification_cases_sync)
