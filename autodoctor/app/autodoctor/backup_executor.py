@@ -249,6 +249,14 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         interrupted = await self.journal.recover_interrupted()
         if interrupted:
             _LOG.error("Interrupted backup/repair stages protected; no mutations replayed")
+        for attempt in interrupted:
+            plan = await self.get_plan(attempt["plan_id"])
+            if plan is None:
+                continue
+            try:
+                await self.cases.publish_case(plan["pattern_key"], force=True)
+            except Exception:
+                _LOG.warning("Recovered repair hold needs notification reconciliation")
         return await super().resume_pending_verifications()
 
     async def _verify_after_window(self, execution_id: str) -> None:
