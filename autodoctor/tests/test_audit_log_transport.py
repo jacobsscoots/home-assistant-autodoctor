@@ -114,8 +114,9 @@ def test_last_moment_edit_or_start_blocks_save(mutate):
         ha, client = client_pair()
         key, before = await client.resolve()
         mutate(ha)
+        after = compile_repair(before)
         with pytest.raises(RepairBlocked):
-            await client.write_checked(key, before, compile_repair(before))
+            await client.write_checked(key, before, after)
         assert ha.posts == []
     asyncio.run(run())
 

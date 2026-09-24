@@ -20,6 +20,7 @@ from .repair_journal import RepairJournal, config_digest
 _LOG = logging.getLogger(__name__)
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _RECOVERABLE = {"setup_error", "setup_retry", "not_loaded"}
+_REPAIR_MEMORY_PREFIX = "repair:"
 
 
 class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
@@ -49,6 +50,9 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             return audit_log_recipe.validate_plan(self.settings, plan, self.enabled)
         if plan.get("repair_type") != RECIPE_TYPE:
             return super().validate_plan(plan)
+        return self._validate_diagnostic_plan(plan)
+
+    def _validate_diagnostic_plan(self, plan: dict[str, Any]) -> tuple[bool, str, str | None]:
         if not self.enabled or not self.settings.diagnostic_template_repair_enabled:
             return False, "diagnostic_recipe_not_enabled", None
         if plan.get("status") != "proposed" or plan.get("risk") != "low":
@@ -57,15 +61,20 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             change = self._plan_change(plan)
         except ValueError:
             return False, "diagnostic_plan_must_contain_one_change", None
-        if (change.get("operation") != RECIPE_TYPE or change.get("recipe_id") != RECIPE_ID
-                or change.get("entity_id") not in self.settings.diagnostic_repair_entities
-                or (plan.get("evidence") or {}).get("origin") != "compiled_diagnostic_recipe"):
+        if not self._diagnostic_change_enrolled(plan, change):
             return False, "diagnostic_recipe_or_target_not_enrolled", None
         for field in ("before_digest", "after_digest"):
             if not isinstance(change.get(field), str) or not _DIGEST.fullmatch(change[field]):
                 return False, "diagnostic_plan_missing_preconditions", None
         target = str(change.get("target") or "")
         return bool(target), "eligible" if target else "missing_target", target or None
+
+    def _diagnostic_change_enrolled(self, plan: dict[str, Any], change: dict[str, Any]) -> bool:
+        return (change.get("operation") == RECIPE_TYPE
+                and change.get("recipe_id") == RECIPE_ID
+                and change.get("entity_id") in self.settings.diagnostic_repair_entities
+                and (plan.get("evidence") or {}).get("origin") == "compiled_diagnostic_recipe"
+        )
 
     async def approve_and_execute(self, plan_id: str) -> dict[str, Any]:
         return await self._execute_backed_up(plan_id, "manual")
@@ -317,18 +326,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             return
         committed = False
         try:
-            if await asyncio.to_thread(self._has_recurred, plan, attempt):
-                raise RepairBlocked("incident_recurred_after_mutation")
-            healthy, evidence = await self._verification_evidence(plan, attempt)
-            if healthy:
-                committed = await asyncio.to_thread(self._commit_verified_success, plan, attempt, evidence)
-                if not committed:
-                    raise RepairBlocked("incident_recurred_after_mutation")
-            elif (plan["repair_type"] == audit_log_recipe.REPAIR_TYPE
-                  and self._now() < attempt["verification_started_at"] + max(900, self.verification_seconds)):
-                await self.journal.advance(execution_id, "verifying")
-            else:
-                await self._abort(plan, attempt, "verification_inconclusive_no_success_claim", status="verification_inconclusive", rollback=False)
+            committed = await self._evaluate_verification(plan, attempt, execution_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -340,6 +338,22 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
                 await self._prune_after_success(attempt["target_key"])
             except Exception:
                 _LOG.warning("Verified repair retained; notification/retention follow-up needs attention")
+
+    async def _evaluate_verification(self, plan, attempt, execution_id: str) -> bool:
+        if await asyncio.to_thread(self._has_recurred, plan, attempt):
+            raise RepairBlocked("incident_recurred_after_mutation")
+        healthy, evidence = await self._verification_evidence(plan, attempt)
+        if healthy:
+            if not await asyncio.to_thread(self._commit_verified_success, plan, attempt, evidence):
+                raise RepairBlocked("incident_recurred_after_mutation")
+            return True
+        if (plan["repair_type"] == audit_log_recipe.REPAIR_TYPE
+                and self._now() < attempt["verification_started_at"] + max(900, self.verification_seconds)):
+            await self.journal.advance(execution_id, "verifying")
+        else:
+            await self._abort(plan, attempt, "verification_inconclusive_no_success_claim",
+                              status="verification_inconclusive", rollback=False)
+        return False
 
     def _has_recurred(self, plan, attempt) -> bool:
         with database_connection(self.db_path, readonly=True) as db:
@@ -403,20 +417,20 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         super()._persist_verified_fix(db, plan, case, evidence, now)
         if plan["repair_type"] == "reload_config_entry":
             verification = "Confirmed encrypted pre-repair backup; native read-only HA status showed the exact entry loaded with no case recurrence."
-            db.execute("UPDATE knowledge SET verification=?,metadata_json=? WHERE memory_key=?", (verification, json.dumps({"repair_type": "reload_config_entry", "verification": evidence}), "repair:" + plan["plan_id"]))
+            db.execute("UPDATE knowledge SET verification=?,metadata_json=? WHERE memory_key=?", (verification, json.dumps({"repair_type": "reload_config_entry", "verification": evidence}), _REPAIR_MEMORY_PREFIX + plan["plan_id"]))
             exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='knowledge_fts'").fetchone()
             if exists:
-                db.execute("UPDATE knowledge_fts SET verification=? WHERE memory_key=?", (verification, "repair:" + plan["plan_id"]))
+                db.execute("UPDATE knowledge_fts SET verification=? WHERE memory_key=?", (verification, _REPAIR_MEMORY_PREFIX + plan["plan_id"]))
         if plan["repair_type"] in {RECIPE_TYPE, audit_log_recipe.REPAIR_TYPE}:
             resolution = "Compiled diagnostic log-message guard applied; no control actions, triggers or conditions were changed."
             verification = "Stored postimage matched and a natural diagnostic run completed; no case recurrence in the verification window."
             if plan["repair_type"] == audit_log_recipe.REPAIR_TYPE:
                 resolution = "Combined JSON serialization and Base64 encoding; payload and shell command unchanged."
                 verification = "Natural previously-failing input encoded intact; source matched and no origin/case recurrence. Log append was not independently verified."
-            db.execute("UPDATE knowledge SET source='autodoctor-compiled-repair',resolution=?,verification=?,metadata_json=? WHERE memory_key=?", (resolution, verification, json.dumps({"repair_type": plan["repair_type"], "verification": evidence}), "repair:" + plan["plan_id"]))
+            db.execute("UPDATE knowledge SET source='autodoctor-compiled-repair',resolution=?,verification=?,metadata_json=? WHERE memory_key=?", (resolution, verification, json.dumps({"repair_type": plan["repair_type"], "verification": evidence}), _REPAIR_MEMORY_PREFIX + plan["plan_id"]))
             exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='knowledge_fts'").fetchone()
             if exists:
-                db.execute("UPDATE knowledge_fts SET resolution=?,verification=? WHERE memory_key=?", (resolution, verification, "repair:" + plan["plan_id"]))
+                db.execute("UPDATE knowledge_fts SET resolution=?,verification=? WHERE memory_key=?", (resolution, verification, _REPAIR_MEMORY_PREFIX + plan["plan_id"]))
 
     async def _prune_after_success(self, key: str) -> None:
         rows = await self.journal.backups(key)
