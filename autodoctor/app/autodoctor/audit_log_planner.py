@@ -20,7 +20,7 @@ class AuditLogRepairPlanner:
         self.last_result = "no_matching_live_event"
         self.plans_created = 0
 
-    async def consider(self, event: LogEvent, fp: str, pattern: str, row: dict[str, Any]) -> bool:
+    async def consider(self, event: LogEvent, fp: str, pattern: str, _row: dict[str, Any]) -> bool:
         if not event.name.startswith("homeassistant.components.script.") or not matches_incident(event.message + "\n" + event.exception):
             return False
         if not enrolled(self.settings):

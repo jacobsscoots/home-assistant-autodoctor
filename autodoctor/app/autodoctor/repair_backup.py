@@ -8,6 +8,8 @@ from typing import Any
 import aiohttp
 
 MIB = 1024 * 1024
+_LOCAL_BACKUP_LOCATION = ".local"
+_CREATE_BACKUP_PATH = "/backups/new/partial"
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
 
@@ -72,12 +74,13 @@ class SupervisorBackupClient:
 
     async def _request(
         self, method: str, path: str, *, body: dict[str, Any] | None = None,
-        timeout: float = 30,
     ) -> dict[str, Any]:
+        # Backup creation has a longer deadline; other fixed Supervisor routes use 30 seconds.
+        request_timeout = 600 if (method, path) == ("POST", _CREATE_BACKUP_PATH) else 30
         try:
             async with self.session.request(
                 method, "http://supervisor" + path, json=body,
-                timeout=aiohttp.ClientTimeout(total=timeout), allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=request_timeout), allow_redirects=False,
             ) as response:
                 if response.status != 200:
                     raise RepairBlocked("supervisor_request_rejected")
@@ -114,11 +117,11 @@ class SupervisorBackupClient:
     ) -> tuple[str, str]:
         try:
             data = await self._request(
-                "POST", "/backups/new/partial", timeout=600,
+                "POST", _CREATE_BACKUP_PATH,
                 body={
                     "name": name, "password": password, "compressed": True,
                     "homeassistant": True, "homeassistant_exclude_database": True,
-                    "addons": [], "folders": [], "location": ".local",
+                    "addons": [], "folders": [], "location": _LOCAL_BACKUP_LOCATION,
                     "background": False, "extra": {"autodoctor": marker},
                 },
             )
@@ -139,7 +142,7 @@ class SupervisorBackupClient:
 
     async def delete_local(self, slug: str) -> None:
         await self._request(
-            "DELETE", f"/backups/{valid_id(slug)}", body={"location": [".local"]},
+            "DELETE", f"/backups/{valid_id(slug)}", body={"location": [_LOCAL_BACKUP_LOCATION]},
         )
 
     @staticmethod
@@ -154,7 +157,7 @@ class SupervisorBackupClient:
             info.get("homeassistant_exclude_database") is True,
             info.get("addons") == [],
             info.get("folders") == [],
-            info.get("location") in (None, ".local"),
+            info.get("location") in (None, _LOCAL_BACKUP_LOCATION),
             (info.get("extra") or {}).get("autodoctor") == marker,
         )
         if not all(expected):

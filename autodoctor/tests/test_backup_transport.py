@@ -62,6 +62,7 @@ def test_backup_post_is_fixed_encrypted_local_and_never_retried():
         assert options["json"]["folders"] == []
         assert options["json"]["location"] == ".local"
         assert options["json"]["background"] is False
+        assert options["timeout"].total == 600
     asyncio.run(run())
 
 
@@ -70,8 +71,9 @@ def test_uncertain_backup_response_never_replays_post(result):
     async def run():
         session = Session([result])
         client = SupervisorBackupClient(session)
+        password = secrets.token_urlsafe(24)
         with pytest.raises(BackupUncertain, match="outcome_uncertain"):
-            await client.create(name="Test", password=secrets.token_urlsafe(24), marker={})
+            await client.create(name="Test", password=password, marker={})
         assert len(session.calls) == 1
     asyncio.run(run())
 
@@ -83,6 +85,7 @@ def test_delete_is_scoped_to_recorded_local_slug():
         args, options = session.calls[0]
         assert args == ("DELETE", "http://supervisor/backups/backup_test")
         assert options["json"] == {"location": [".local"]}
+        assert options["timeout"].total == 30
         assert len(session.calls) == 1
     asyncio.run(run())
 
