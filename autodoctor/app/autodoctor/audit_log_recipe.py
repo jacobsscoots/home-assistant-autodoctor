@@ -24,6 +24,7 @@ _ARGUMENT = re.compile(r"\s*{{\s*b64\s*}}\s*\Z")
 _SHELL = re.compile(r"shell_command\.[a-z0-9_]+\Z")
 _FIELDS = {"category", "event", "entity", "old_state", "new_state", "automation", "trigger_id", "notes"}
 _TOP = {"alias", "description", "icon", "mode", "max", "max_exceeded", "fields", "sequence", "trace"}
+_EXECUTION_CONTRACTS = {("parallel", 10), ("queued", 100)}
 PATCHED_EXPRESSION = "{{ payload | to_json | base64_encode }}"
 
 
@@ -79,7 +80,8 @@ def compile_repair(config: dict[str, Any]) -> dict[str, Any]:
     """Preserve the payload, inputs, shell call and metadata; change encoding only."""
     if not isinstance(config, dict) or set(config) - _TOP:
         raise RepairBlocked("audit_log_config_shape_not_supported")
-    if config.get("mode") != "parallel" or type(config.get("max")) is not int or config["max"] != 10:
+    max_runs = config.get("max")
+    if type(max_runs) is not int or (config.get("mode"), max_runs) not in _EXECUTION_CONTRACTS:
         raise RepairBlocked("audit_log_execution_contract_mismatch")
     if not isinstance(config.get("fields"), dict) or set(config["fields"]) != _FIELDS:
         raise RepairBlocked("audit_log_input_contract_mismatch")

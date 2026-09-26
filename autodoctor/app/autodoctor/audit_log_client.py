@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import base64
 import json
+from datetime import datetime
 
 from typing import Any
 
@@ -93,8 +94,13 @@ class AuditLogHAClient:
         traces = await self.ha._repair_read({"type": "trace/list", "domain": "script", "item_id": key})
         if not isinstance(traces, list):
             raise RepairBlocked("audit_log_trace_list_unavailable")
-        for trace in traces[:20]:
-            if not isinstance(trace, dict) or not DiagnosticHAClient._completed_trace(trace, since):
+        candidates = sorted(
+            (trace for trace in traces if isinstance(trace, dict)),
+            key=self._trace_started_at,
+            reverse=True,
+        )[:20]
+        for trace in candidates:
+            if not DiagnosticHAClient._completed_trace(trace, since):
                 continue
             run_id = trace.get("run_id")
             if not isinstance(run_id, str) or not run_id:
@@ -103,6 +109,19 @@ class AuditLogHAClient:
             if self._verified_detail(detail, key, since, expected):
                 return True
         return False
+
+    @staticmethod
+    def _trace_started_at(trace: dict[str, Any]) -> float:
+        timestamp = trace.get("timestamp")
+        if not isinstance(timestamp, dict):
+            return float("-inf")
+        try:
+            started_at = datetime.fromisoformat(timestamp["start"])
+        except (KeyError, TypeError, ValueError):
+            return float("-inf")
+        if started_at.tzinfo is None:
+            return float("-inf")
+        return started_at.timestamp()
 
     @staticmethod
     def _verified_detail(detail: Any, key: str, since: float, expected: dict[str, Any]) -> bool:

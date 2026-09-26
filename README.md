@@ -9,6 +9,17 @@ fail-closed. Automatic repairs are disabled by default. With the repair executor
 deterministic allowlist requires individual ingress approval unless low-risk auto-apply is explicitly
 enabled; automatic execution must pass the same validation and post-repair verification gates.
 
+## v0.5.2 repair verification and audit-log burst reliability
+
+- Verifies the newest Home Assistant script traces first, preventing busy loggers from hiding
+  valid post-repair evidence behind older traces.
+- Safely reconciles previously inconclusive JSON/Base64 repairs only when the protected backup,
+  exact repaired config, no-recurrence check, and later natural trace evidence all still agree.
+- Adds clear lifecycle logging for backup confirmation, mutation, verification and retained holds.
+- Recognises the reviewed burst-safe `queued` / `max: 100` audit logger contract while leaving
+  the working `{{ payload | to_json | base64_encode }}` expression unchanged.
+- Clarifies that recipe `last_result` is planner state, not the final repair execution state.
+
 ## v0.5.1 reviewed logger JSON/Base64 repair
 
 - Adds a separate opt-in, full-config-digest-bound recipe for the reproduced intermediate

@@ -74,4 +74,5 @@ class AuditLogRepairPlanner:
 
     def health(self) -> dict[str, Any]:
         return {"recipe_id": RECIPE_ID, "enrolled": enrolled(self.settings),
-                "plans_created": self.plans_created, "last_result": self.last_result}
+                "plans_created": self.plans_created, "last_result": self.last_result,
+                "last_result_scope": "planner"}

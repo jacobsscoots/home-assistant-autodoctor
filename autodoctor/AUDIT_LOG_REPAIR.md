@@ -58,10 +58,13 @@ Previously diagnosed cases can qualify; existing repair/user-action holds are no
 ## Strict applicability
 
 Only the reviewed Core **2026.9.3** is accepted; other versions require requalification.
-The recipe accepts a parallel script with max 10, the eight reviewed diagnostic fields,
+The recipe accepts either the original `parallel`/`max: 10` execution contract or the reviewed
+burst-safe `queued`/`max: 100` contract, plus the eight reviewed diagnostic fields,
 exactly two sequence actions, and first-step variables in order `payload`, `json_line`,
 `b64`. The only terminal action is the unchanged, operator-reviewed `shell_command.*`
-with exactly the existing Base64 argument. Templates with extra filters, extra actions,
+with exactly the existing Base64 argument. The queued contract serializes append operations and
+keeps up to 100 invocations queued; it does not alter the Base64 payload expression. Templates
+with extra filters, extra actions,
 blueprints, arbitrary parameters or missing preconditions are rejected.
 
 The full raw-config digest binds the payload construction and terminal service. It is

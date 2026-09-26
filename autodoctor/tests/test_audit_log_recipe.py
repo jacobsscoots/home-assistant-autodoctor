@@ -109,7 +109,7 @@ def test_patch_only_removes_intermediate_and_combines_encoding():
 @pytest.mark.parametrize("mutate", [
     lambda c: c.update(variables={"additional": "unreviewed"}),
     lambda c: c.update(use_blueprint={"path": "something"}),
-    lambda c: c.update(mode="queued"),
+    lambda c: c.update(mode="queued", max=10),
     lambda c: c.update(max=True),
     lambda c: c["fields"].update(extra={}),
     lambda c: c["sequence"].append({"action": "light.turn_on"}),
@@ -129,6 +129,15 @@ def test_recipe_rejects_unreviewed_shapes(mutate):
     with pytest.raises(RepairBlocked):
         compile_repair(config)
 
+
+
+def test_recipe_accepts_reviewed_burst_safe_queue_contract():
+    config = logger_config()
+    config.update(mode="queued", max=100)
+    patched = compile_repair(config)
+    assert patched["mode"] == "queued"
+    assert patched["max"] == 100
+    assert patched["sequence"][0]["variables"]["b64"] == PATCHED_EXPRESSION
 
 def test_variable_order_is_part_of_recipe_precondition():
     config = logger_config()
