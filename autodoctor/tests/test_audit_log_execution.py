@@ -280,3 +280,73 @@ def test_compiled_planner_shares_analysis_claim(tmp_path):
             assert calls == [True]
             assert "pattern" not in engine._patterns_in_analysis
     asyncio.run(run())
+
+
+def test_natural_verification_prefers_newest_traces_not_oldest():
+    class TraceHA:
+        def __init__(self):
+            self.reads = []
+            self.traces = []
+            self.details = {}
+
+        async def _repair_read(self, message):
+            self.reads.append(message)
+            if message["type"] == "trace/list":
+                return self.traces
+            return self.details[message["run_id"]]
+
+    async def run():
+        from datetime import timedelta
+
+        now = datetime.now(timezone.utc)
+        ha = TraceHA()
+        client = AuditLogHAClient(ha, type("Settings", (), {})())
+        config = compile_repair(logger_config())
+        for idx in range(25):
+            ha.traces.append({
+                "domain": "script", "item_id": SCRIPT_KEY, "run_id": f"old-{idx}",
+                "state": "stopped", "script_execution": "finished",
+                "timestamp": {"start": (now - timedelta(hours=1, minutes=idx)).isoformat()},
+            })
+        fresh, _ = trace_fixture()
+        fresh["run_id"] = "fresh"
+        fresh["timestamp"]["start"] = now.isoformat()
+        ha.traces.append({
+            "domain": "script", "item_id": SCRIPT_KEY, "run_id": "fresh",
+            "state": "stopped", "script_execution": "finished",
+            "timestamp": {"start": now.isoformat()},
+        })
+        ha.details["fresh"] = fresh
+        assert await client.natural_run_verified(
+            SCRIPT_KEY, (now - timedelta(minutes=5)).timestamp(), config
+        )
+        assert any(read.get("run_id") == "fresh" for read in ha.reads)
+
+    asyncio.run(run())
+
+
+def test_inconclusive_audit_repair_can_reconcile_from_later_natural_evidence(tmp_path):
+    async def run():
+        async with stack(tmp_path, **settings_options()) as (settings, store, cases, ex, _, _, _, clock):
+            client, _, plan = await create_plan(settings, store, cases, ex, clock)
+            client.proof = False
+            result = await ex.auto_execute(plan["plan_id"])
+            await ex.close()
+            clock[0] += 901
+            await ex._verify_execution(result["execution_id"])
+            held = await ex.journal.get(result["execution_id"])
+            assert held["stage"] == "verification_inconclusive"
+            assert held["protected"] == 1
+
+            client.proof = True
+            assert await ex._reconcile_inconclusive_audit_log_repairs() == 1
+            final = await ex.journal.get(result["execution_id"])
+            assert final["stage"] == "succeeded"
+            assert final["protected"] == 0
+            with sqlite3.connect(ex.db_path) as db:
+                assert db.execute(
+                    "SELECT status FROM repair_executions WHERE execution_id=?",
+                    (result["execution_id"],),
+                ).fetchone()[0] == "succeeded"
+
+    asyncio.run(run())

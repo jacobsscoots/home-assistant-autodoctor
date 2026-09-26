@@ -179,6 +179,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             marker=self.journal.marker(attempt), max_bytes=max_bytes,
         )
         await self.journal.advance(eid, "backed_up", backup_size=size)
+        _LOG.info("Repair backup confirmed execution=%s backup=%s size_bytes=%s", eid, slug, size)
 
     async def _perform_mutation(self, plan, attempt, before, after) -> None:
         eid = attempt["execution_id"]
@@ -195,6 +196,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         else:
             await self.ha.reload_config_entry(attempt["target"])
         await asyncio.to_thread(self._commit_verifying, plan, eid, self._now())
+        _LOG.info("Repair mutation applied execution=%s target=%s; verification started", eid, attempt["target"])
         try:
             await self.cases.publish_case(plan["pattern_key"], force=True)
         except Exception:
@@ -242,6 +244,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             uncertain = status == "mutation_uncertain"
         await self.journal.advance(current["execution_id"], status, protected=1, uncertain=int(uncertain), error_code=code)
         await super()._fail_execution(plan, current["execution_id"], code, status=status)
+        _LOG.warning("Repair execution ended status=%s execution=%s reason=%s", status, current["execution_id"], code)
 
     async def _rollback(self, attempt: dict[str, Any]) -> str:
         before = json.loads(attempt["preimage_json"])
@@ -286,7 +289,11 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
                 await self.cases.publish_case(plan["pattern_key"], force=True)
             except Exception:
                 _LOG.warning("Recovered repair hold needs notification reconciliation")
-        return await super().resume_pending_verifications()
+        resumed = await super().resume_pending_verifications()
+        reconciled = await self._reconcile_inconclusive_audit_log_repairs()
+        if reconciled:
+            _LOG.warning("Reconciled %s previously inconclusive audit-log repair(s) from natural post-repair evidence", reconciled)
+        return resumed
 
     async def _verify_after_window(self, execution_id: str) -> None:
         attempt = await self.journal.get(execution_id)
@@ -346,11 +353,14 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         if healthy:
             if not await asyncio.to_thread(self._commit_verified_success, plan, attempt, evidence):
                 raise RepairBlocked("incident_recurred_after_mutation")
+            _LOG.info("Repair verification succeeded execution=%s plan=%s", execution_id, plan["plan_id"])
             return True
         if (plan["repair_type"] == audit_log_recipe.REPAIR_TYPE
                 and self._now() < attempt["verification_started_at"] + max(900, self.verification_seconds)):
             await self.journal.advance(execution_id, "verifying")
+            _LOG.info("Repair verification awaiting natural evidence execution=%s", execution_id)
         else:
+            _LOG.warning("Repair verification inconclusive execution=%s; retaining recovery hold", execution_id)
             await self._abort(plan, attempt, "verification_inconclusive_no_success_claim",
                               status="verification_inconclusive", rollback=False)
         return False
@@ -393,20 +403,92 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             raise RepairBlocked("integration_not_healthy_after_reload")
         return entry.get("state") == "loaded", {"integration_loaded": entry.get("state") == "loaded"}
 
+    async def _reconcile_inconclusive_audit_log_repairs(self) -> int:
+        attempts = await asyncio.to_thread(self._inconclusive_audit_log_attempts)
+        reconciled = 0
+        for attempt in attempts:
+            plan = await self.get_plan(attempt["plan_id"])
+            if not plan or plan.get("repair_type") != audit_log_recipe.REPAIR_TYPE:
+                continue
+            try:
+                latest = await self.journal.get(attempt["execution_id"])
+                if latest is None or latest["stage"] != "verification_inconclusive" or latest["uncertain"]:
+                    continue
+                info = await self.backups.inspect(latest["backup_slug"])
+                self.backups.validate_snapshot(
+                    info,
+                    slug=latest["backup_slug"],
+                    marker=self.journal.marker(latest),
+                    max_bytes=self.settings.repair_backup_max_size_mb * MIB,
+                )
+                if await asyncio.to_thread(self._has_recurred, plan, latest):
+                    continue
+                healthy, evidence = await self._verification_evidence(plan, latest)
+                if not healthy:
+                    continue
+                if await asyncio.to_thread(self._commit_reconciled_success, plan, latest, evidence):
+                    reconciled += 1
+                    _LOG.info(
+                        "Repair verification reconciled execution=%s plan=%s from later natural evidence",
+                        latest["execution_id"], plan["plan_id"],
+                    )
+                    try:
+                        await self.cases.publish_case(plan["pattern_key"], force=True)
+                        await self._prune_after_success(latest["target_key"])
+                    except Exception:
+                        _LOG.warning("Reconciled repair retained; notification/retention follow-up needs attention")
+            except Exception:
+                _LOG.exception(
+                    "Could not reconcile inconclusive audit-log repair execution=%s; recovery hold retained",
+                    attempt["execution_id"],
+                )
+        return reconciled
+
+    def _inconclusive_audit_log_attempts(self) -> list[dict[str, Any]]:
+        with database_connection(self.db_path, readonly=True) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                "SELECT * FROM repair_attempts "
+                "WHERE repair_type=? AND stage='verification_inconclusive' "
+                "AND uncertain=0 AND protected=1 AND backup_slug!='' AND deleted=0 "
+                "ORDER BY created_at",
+                (audit_log_recipe.REPAIR_TYPE,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def _commit_reconciled_success(self, plan, attempt, evidence) -> bool:
+        return self._commit_success_from_stage(
+            plan, attempt, evidence, expected_stage="verification_inconclusive"
+        )
+
     def _commit_verified_success(self, plan, attempt, evidence) -> bool:
+        return self._commit_success_from_stage(plan, attempt, evidence, expected_stage="checking")
+
+    def _commit_success_from_stage(self, plan, attempt, evidence, *, expected_stage: str) -> bool:
         eid = attempt["execution_id"]
         now = self._now()
         evidence = {**evidence, "verification_window_seconds": self.verification_seconds, "backup_confirmed": True}
         with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
-            current = db.execute("SELECT stage FROM repair_attempts WHERE execution_id=?", (eid,)).fetchone()
-            if not current or current["stage"] != "checking":
+            current = db.execute(
+                "SELECT stage,uncertain,protected FROM repair_attempts WHERE execution_id=?",
+                (eid,),
+            ).fetchone()
+            if (
+                not current
+                or current["stage"] != expected_stage
+                or bool(current["uncertain"])
+                or not bool(current["protected"])
+            ):
                 return False
             case = db.execute("SELECT * FROM incident_cases WHERE pattern_key=?", (plan["pattern_key"],)).fetchone()
             if not case or self._recurrence_in_transaction(db, plan, attempt):
                 return False
-            db.execute("UPDATE repair_attempts SET stage='succeeded', protected=0 WHERE execution_id=?", (eid,))
+            db.execute(
+                "UPDATE repair_attempts SET stage='succeeded', protected=0, error_code='' WHERE execution_id=?",
+                (eid,),
+            )
             db.execute("UPDATE repair_executions SET status='succeeded', verification_json=?, error='' WHERE execution_id=?", (json.dumps(evidence), eid))
             db.execute("UPDATE repair_plans SET status='succeeded', verified_at=?, updated_at=?, error='' WHERE plan_id=?", (now, now, plan["plan_id"]))
             db.execute("UPDATE incident_cases SET status='resolved', updated_at=? WHERE pattern_key=?", (now, plan["pattern_key"]))
