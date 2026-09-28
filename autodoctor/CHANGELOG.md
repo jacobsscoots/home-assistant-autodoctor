@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+- Retry inconclusive audit-log verification every 60 seconds while running, including after transient evidence-access failures.
+- Keep the existing backup, exact-config, no-recurrence and natural-trace checks; never replay a repair or clear an unverified hold.
+- Cancel the retry worker during shutdown and omit raw exception details from retry logs.
+
 ## 0.5.2
 
 - Prefer newest script traces during natural repair verification.

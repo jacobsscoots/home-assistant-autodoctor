@@ -1,3 +1,3 @@
 """AutoDoctor Home Assistant app release metadata."""
 
-AUTODOCTOR_VERSION = "0.5.2"
+AUTODOCTOR_VERSION = "0.5.3"

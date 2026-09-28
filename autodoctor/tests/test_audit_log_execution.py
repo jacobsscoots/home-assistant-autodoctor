@@ -12,6 +12,7 @@ import pytest
 from test_audit_log_recipe import ENTITY, SCRIPT_KEY, logger_config
 from test_backup_first_repairs import stack, verify
 from autodoctor.audit_log_client import AuditLogHAClient
+from autodoctor import backup_executor
 from autodoctor.audit_log_planner import AuditLogRepairPlanner
 from autodoctor.audit_log_recipe import REPAIR_TYPE, compile_repair
 from autodoctor.models import LogEvent
@@ -348,5 +349,114 @@ def test_inconclusive_audit_repair_can_reconcile_from_later_natural_evidence(tmp
                     "SELECT status FROM repair_executions WHERE execution_id=?",
                     (result["execution_id"],),
                 ).fetchone()[0] == "succeeded"
+
+    asyncio.run(run())
+
+
+async def wait_for_attempt_stage(executor, execution_id, stage):
+    async def wait():
+        while (await executor.journal.get(execution_id))["stage"] != stage:
+            await asyncio.sleep(0.01)
+    await asyncio.wait_for(wait(), timeout=3)
+
+
+def test_runtime_retry_verifies_later_evidence_without_restart_or_repair_replay(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_executor, "_RECONCILIATION_INTERVAL_SECONDS", 0.01)
+
+    async def run():
+        async with stack(tmp_path, **settings_options()) as (settings, store, cases, ex, ha, backups, _, clock):
+            # Startup has no held attempts yet; the worker must find a later one.
+            await ex.resume_pending_verifications()
+            worker = ex._reconciliation_task
+            await ex.resume_pending_verifications()
+            assert ex._reconciliation_task is worker
+            client, _, plan = await create_plan(settings, store, cases, ex, clock)
+            client.proof = False
+            result = await ex.auto_execute(plan["plan_id"])
+            verification_tasks = [task for task in ex._tasks if task is not worker]
+            for task in verification_tasks:
+                task.cancel()
+            await asyncio.gather(*verification_tasks, return_exceptions=True)
+            clock[0] += 901
+            await ex._verify_execution(result["execution_id"])
+            assert (await ex.journal.get(result["execution_id"]))["protected"] == 1
+
+            client.proof = True
+            await wait_for_attempt_stage(ex, result["execution_id"], "succeeded")
+            assert (await ex.journal.get(result["execution_id"]))["protected"] == 0
+            assert await ex._reconcile_inconclusive_audit_log_repairs() == 0
+            assert len(client.writes) == 1
+            assert backups.events.count("create") == 1
+            assert ha.reloads == []
+            with sqlite3.connect(ex.db_path) as db:
+                assert db.execute("SELECT count(*) FROM repair_executions WHERE status='succeeded'").fetchone()[0] == 1
+                assert db.execute("SELECT count(*) FROM knowledge WHERE memory_key=?", ("repair:" + plan["plan_id"],)).fetchone()[0] == 1
+            await ex.close()
+            assert worker.cancelled()
+            assert not ex._tasks
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["database", "supervisor"])
+def test_retry_survives_temporary_evidence_failure_without_logging_secrets(tmp_path, monkeypatch, caplog, failure):
+    monkeypatch.setattr(backup_executor, "_RECONCILIATION_INTERVAL_SECONDS", 0.01)
+
+    async def run():
+        async with stack(tmp_path, **settings_options()) as (settings, store, cases, ex, _, backups, _, clock):
+            client, _, plan = await create_plan(settings, store, cases, ex, clock)
+            client.proof = False
+            result = await ex.auto_execute(plan["plan_id"])
+            await ex.close()
+            clock[0] += 901
+            await ex._verify_execution(result["execution_id"])
+            client.proof = True
+            if failure == "database":
+                original = ex._inconclusive_audit_log_attempts
+                def unavailable():
+                    raise RuntimeError("secret-test-credential")
+                monkeypatch.setattr(ex, "_inconclusive_audit_log_attempts", unavailable)
+            else:
+                original = backups.inspect
+                async def unavailable(slug):
+                    raise RuntimeError("secret-test-credential")
+                monkeypatch.setattr(backups, "inspect", unavailable)
+
+            await ex.resume_pending_verifications()
+            held = await ex.journal.get(result["execution_id"])
+            assert held["stage"] == "verification_inconclusive"
+            assert held["protected"] == 1
+            if failure == "database":
+                monkeypatch.setattr(ex, "_inconclusive_audit_log_attempts", original)
+            else:
+                monkeypatch.setattr(backups, "inspect", original)
+            await wait_for_attempt_stage(ex, result["execution_id"], "succeeded")
+            assert len(client.writes) == 1
+            assert "secret-test-credential" not in caplog.text
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("invalid", ["no_proof", "changed_config", "unprotected_backup"])
+def test_reconciliation_retains_hold_when_evidence_is_invalid(tmp_path, invalid):
+    async def run():
+        async with stack(tmp_path, **settings_options()) as (settings, store, cases, ex, _, backups, _, clock):
+            client, _, plan = await create_plan(settings, store, cases, ex, clock)
+            client.proof = False
+            result = await ex.auto_execute(plan["plan_id"])
+            await ex.close()
+            clock[0] += 901
+            await ex._verify_execution(result["execution_id"])
+            client.proof = invalid != "no_proof"
+            if invalid == "changed_config":
+                client.config["max"] = 99
+            if invalid == "unprotected_backup":
+                for item in backups.items.values():
+                    item["protected"] = False
+            assert await ex._reconcile_inconclusive_audit_log_repairs() == 0
+            held = await ex.journal.get(result["execution_id"])
+            assert held["stage"] == "verification_inconclusive"
+            assert held["protected"] == 1
+            assert len(client.writes) == 1
 
     asyncio.run(run())

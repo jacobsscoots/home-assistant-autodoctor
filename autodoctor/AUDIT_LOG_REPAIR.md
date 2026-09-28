@@ -99,8 +99,11 @@ proof flags are retained, not the payload or trace.
 
 If that evidence has not arrived, the repair stays `verifying`, checking every 15 seconds
 for up to 15 minutes (or the configured minimum if longer). It is then **inconclusive**,
-not successful, and its backup remains protected. Restart resumes verification, never
-replays the write. Demonstrated regression permits the existing conditional target-only
+not successful, and its backup remains protected. Inconclusive repairs are checked at startup
+and every 60 seconds while running. Later natural evidence can resolve a hold only when the
+protected backup, exact repaired config and no-recurrence checks still pass. Temporary evidence
+access failures retain the hold for another check; shutdown cancels the retry worker.
+Restart resumes verification, never replays the write. Demonstrated regression permits the existing conditional target-only
 rollback; observed intervening edits and uncertain saves are not overwritten/replayed.
 
 Without a response variable, the script trace does not retain the shell exit status.
