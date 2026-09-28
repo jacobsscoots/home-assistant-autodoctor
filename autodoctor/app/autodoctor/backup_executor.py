@@ -21,6 +21,7 @@ _LOG = logging.getLogger(__name__)
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _RECOVERABLE = {"setup_error", "setup_retry", "not_loaded"}
 _REPAIR_MEMORY_PREFIX = "repair:"
+_RECONCILIATION_INTERVAL_SECONDS = 60
 
 
 class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
@@ -34,6 +35,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         self.last_block_reason = ""
         self.last_cleanup_result = "not_run"
         self._verification_ids: set[str] = set()
+        self._reconciliation_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
         await super().initialize()
@@ -290,10 +292,26 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             except Exception:
                 _LOG.warning("Recovered repair hold needs notification reconciliation")
         resumed = await super().resume_pending_verifications()
-        reconciled = await self._reconcile_inconclusive_audit_log_repairs()
-        if reconciled:
-            _LOG.warning("Reconciled %s previously inconclusive audit-log repair(s) from natural post-repair evidence", reconciled)
+        await self._try_reconcile_audit_log_repairs()
+        if self._reconciliation_task is None or self._reconciliation_task.done():
+            self._reconciliation_task = asyncio.create_task(
+                self._reconcile_audit_log_repairs_periodically(),
+                name="autodoctor-audit-verification-reconciliation",
+            )
+            self._tasks.add(self._reconciliation_task)
+            self._reconciliation_task.add_done_callback(self._tasks.discard)
         return resumed
+
+    async def _try_reconcile_audit_log_repairs(self) -> None:
+        try:
+            await self._reconcile_inconclusive_audit_log_repairs()
+        except Exception:
+            _LOG.warning("Audit-log verification reconciliation unavailable; recovery holds retained for retry")
+
+    async def _reconcile_audit_log_repairs_periodically(self) -> None:
+        while True:
+            await asyncio.sleep(_RECONCILIATION_INTERVAL_SECONDS)
+            await self._try_reconcile_audit_log_repairs()
 
     async def _verify_after_window(self, execution_id: str) -> None:
         attempt = await self.journal.get(execution_id)
@@ -438,8 +456,8 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
                     except Exception:
                         _LOG.warning("Reconciled repair retained; notification/retention follow-up needs attention")
             except Exception:
-                _LOG.exception(
-                    "Could not reconcile inconclusive audit-log repair execution=%s; recovery hold retained",
+                _LOG.warning(
+                    "Could not reconcile inconclusive audit-log repair execution=%s; recovery hold retained for retry",
                     attempt["execution_id"],
                 )
         return reconciled

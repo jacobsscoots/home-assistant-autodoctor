@@ -9,8 +9,10 @@ fail-closed. Automatic repairs are disabled by default. With the repair executor
 deterministic allowlist requires individual ingress approval unless low-risk auto-apply is explicitly
 enabled; automatic execution must pass the same validation and post-repair verification gates.
 
-## v0.5.2 repair verification and audit-log burst reliability
+## v0.5.3 repair verification and audit-log burst reliability
 
+- Retries inconclusive audit-log verification every 60 seconds, so later evidence and
+  temporary Home Assistant/Supervisor failures do not require another restart.
 - Verifies the newest Home Assistant script traces first, preventing busy loggers from hiding
   valid post-repair evidence behind older traces.
 - Safely reconciles previously inconclusive JSON/Base64 repairs only when the protected backup,
