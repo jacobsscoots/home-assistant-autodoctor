@@ -45,6 +45,10 @@ class ControlDashboard(RepairDashboard):
 
     async def index(self, request: web.Request) -> web.Response:
         health = await self.engine.health()
+        for name in ("proactive", "github_history"):
+            worker = getattr(self.engine, name, None)
+            if worker is not None:
+                health[name] = worker.health()
         incidents = await self.store.list_recent(50)
         cases = await self.engine.cases.list_cases(200)
         plans = await self.engine.cases.list_repair_plans(100)

@@ -9,6 +9,24 @@ fail-closed. Automatic repairs are disabled by default. With the repair executor
 deterministic allowlist requires individual ingress approval unless low-risk auto-apply is explicitly
 enabled; automatic execution must pass the same validation and post-repair verification gates.
 
+## v0.6.0 enrolled autonomy
+
+- Supervisor watchdog liveness, supervised worker recovery, real watcher connection health,
+  and delayed reconnects after clean WebSocket closes.
+- Opt-in bounded native checks for selected missing/unavailable/stale entities and integration
+  setup failures, independent of error-log delivery and external AI.
+- A compiled owner-enrolled integration-reload recipe, usable with no AI/MCP, and stricter
+  automatic reload enrollment for all integration proposals.
+- Evidence-only late-verification recovery for all three supported repair types, retaining
+  uncertain/conflicting/expired holds and never replaying repair writes.
+- Optional durable structured-only GitHub history with bounded updates, persistent deduplication
+  and no blind create retry after a lost response.
+- Dashboard status reflects actual automatic arming and recovery/monitoring state.
+
+Read [setup, upgrade changes and remaining boundaries](autodoctor/AUTONOMY.md).
+New enrollment/history defaults remain empty/off; no live target is enrolled by this release.
+Keep auto-update off and complete live qualification after installing manually.
+
 ## v0.5.3 repair verification and audit-log burst reliability
 
 - Retries inconclusive audit-log verification every 60 seconds, so later evidence and

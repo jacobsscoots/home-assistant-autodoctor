@@ -137,6 +137,7 @@ class IncidentCaseManager:
     ) -> tuple[dict[str, Any], bool]:
         key = str(pattern_key or f"fingerprint/{fingerprint}")
         now = float(timestamp)
+        updated_at = self._now()  # Mutation time for durable consumers; evidence timestamps stay original.
         with database_connection(self.db_path) as db:
             db.row_factory = sqlite3.Row
             existing = db.execute(
@@ -158,7 +159,7 @@ class IncidentCaseManager:
                         now,
                         fingerprint,
                         self.notification_id(key),
-                        now,
+                        updated_at,
                     ),
                 )
             else:
@@ -179,7 +180,7 @@ class IncidentCaseManager:
                         now,
                         1 if fingerprint_is_new else 0,
                         fingerprint,
-                        now,
+                        updated_at,
                         key,
                     ),
                 )

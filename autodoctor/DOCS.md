@@ -1,5 +1,9 @@
 # AutoDoctor configuration
 
+For v0.6.0 monitoring, watchdog, enrolled integration reloads, verification recovery
+and GitHub history settings, see [AUTONOMY.md](AUTONOMY.md). The setup described below
+continues to apply. New options are empty/off by default and do not enroll live targets.
+
 ## Required Home Assistant setting
 
 AutoDoctor's primary detector needs Home Assistant to fire log events:

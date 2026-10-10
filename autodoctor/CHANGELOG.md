@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+- Add Supervisor liveness probing, bounded worker recovery, actual watcher health and
+  backoff after clean WebSocket closes; retain ingress-only diagnostics/approval.
+- Add opt-in bounded native entity/staleness/integration observations with persistent
+  confirmation timing and no invented system-log events or external AI calls.
+- Add the owner-enrolled AI-independent integration reload recipe; require exact
+  enrollment for all automatic integration reloads, preserving backup/verification gates.
+- Extend evidence-only late verification to integration and diagnostic repairs; retain
+  uncertain, conflicting, recurring, superseded and expired recovery holds.
+- Add opt-in structured-only GitHub history with a durable outbox, bounded aggregation,
+  repository-scoped mappings and no blind retry after an uncertain issue creation.
+- Correct dashboard automatic-mode copy and show worker/check/history telemetry.
+- Preserve event timestamps while recording case mutation time for history consumers.
+- New feature targets and GitHub history remain off/empty by default. Live installation,
+  enrollment and repair/backup qualification are separate required deployment steps.
+
 ## 0.5.3
 
 - Retry inconclusive audit-log verification every 60 seconds while running, including after transient evidence-access failures.

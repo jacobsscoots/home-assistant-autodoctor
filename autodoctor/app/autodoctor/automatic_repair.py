@@ -226,4 +226,7 @@ class AutomaticRepairCoordinator:
                 raise
             except Exception:
                 _LOG.exception("Automatic repair coordinator failed safely; monitoring continues")
+            runtime = getattr(self, "runtime", None)
+            if runtime:
+                runtime.beat("automatic-repair")
             await asyncio.sleep(self.poll_seconds)

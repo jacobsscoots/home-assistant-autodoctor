@@ -23,6 +23,7 @@ class RepairDashboard(CaseDashboard):
     async def start(self) -> None:
         app = web.Application(middlewares=[ingress_or_authenticated_qualification])
         app.router.add_get("/", self.index)
+        app.router.add_get("/live", self.liveness)
         app.router.add_get("/api/health", self.health)
         app.router.add_get("/api/incidents", self.incidents)
         app.router.add_get("/api/cases", self.cases)
@@ -40,7 +41,18 @@ class RepairDashboard(CaseDashboard):
     async def health(self, request: web.Request) -> web.Response:
         data = await self.engine.health()
         data["repair_executor"] = await self.executor.health()
+        data["auto_apply_executor_enabled"] = data["repair_executor"].get("auto_apply_enabled", False)
+        for name in ("proactive", "github_history"):
+            worker = getattr(self.engine, name, None)
+            if worker is not None:
+                data[name] = worker.health()
         return web.json_response(data)
+
+    async def liveness(self, request: web.Request) -> web.Response:
+        runtime = getattr(self.engine, "runtime", None)
+        alive = bool(runtime and runtime.snapshot()["alive"])
+        return web.json_response({"alive": alive}, status=200 if alive else 503,
+                                 headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
     async def repair_executor_health(self, request: web.Request) -> web.Response:
         return web.json_response(await self.executor.health())

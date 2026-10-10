@@ -51,6 +51,19 @@ class Settings:
     audit_log_repair_config_sha256: str = ""
     diagnostic_template_repair_enabled: bool = False
     diagnostic_repair_entities: list[str] = field(default_factory=list)
+    proactive_checks_enabled: bool = False
+    proactive_entities: list[str] = field(default_factory=list)
+    proactive_stale_entities: list[str] = field(default_factory=list)
+    proactive_integration_entries: list[str] = field(default_factory=list)
+    proactive_check_interval_seconds: int = 60
+    proactive_unavailable_grace_seconds: int = 180
+    proactive_stale_seconds: int = 900
+    integration_reload_repair_enabled: bool = False
+    integration_reload_targets: list[str] = field(default_factory=list)
+    repair_reconciliation_max_age_seconds: int = 86400
+    github_history_enabled: bool = False
+    github_history_repository: str = ""
+    github_history_token: str = field(default="", repr=False)
 
     @classmethod
     def load(cls, path: str = "/data/options.json") -> "Settings":

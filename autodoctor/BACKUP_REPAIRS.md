@@ -1,5 +1,11 @@
 # Backup-first repairs (v0.5.0+)
 
+v0.6.0 additionally requires exact owner enrollment for **automatic integration
+reloads**, including AI-proposed plans. Evidence-only late reconciliation now also
+covers integration and diagnostic-template repairs within a bounded age window.
+See [AUTONOMY.md](AUTONOMY.md). Missing/uncertain/conflicting backups remain held;
+no backup or mutation is replayed during recovery.
+
 For the separate opt-in JSON/Base64 logger recipe added in v0.5.1, see
 [AUDIT_LOG_REPAIR.md](AUDIT_LOG_REPAIR.md). Its script-specific verification can wait
 up to 15 minutes for a natural formerly-failing payload; the rules below describe

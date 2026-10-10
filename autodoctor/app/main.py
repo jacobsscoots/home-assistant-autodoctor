@@ -12,6 +12,10 @@ from autodoctor.diagnostic_planner import DiagnosticRepairPlanner
 from autodoctor.ai_usage_recovery import recover_orphaned_ai_usage
 from autodoctor.automatic_dashboard import AutomaticControlDashboard
 from autodoctor.automatic_repair import AutomaticRepairCoordinator
+from autodoctor.runtime_health import WorkerSupervisor
+from autodoctor.integration_planner import IntegrationReloadPlanner
+from autodoctor.proactive import ProactiveMonitor
+from autodoctor.github_mirror import GitHubHistoryMirror
 from autodoctor.case_engine import CaseAwareAutoDoctorEngine
 from autodoctor.config import Settings
 from autodoctor.ha import HomeAssistantClient
@@ -42,10 +46,21 @@ async def async_main() -> None:
     llm = build_provider(settings)
     mcp = MCPBackend(settings)
     engine = CaseAwareAutoDoctorEngine(settings, store, ha, llm, mcp)
+    runtime = WorkerSupervisor()
+    engine.runtime = runtime
+    mcp.runtime = runtime
     executor = BackupFirstRepairExecutor(settings, store.path, ha, mcp, engine.cases)
     engine.diagnostic_planner = DiagnosticRepairPlanner(settings, engine.cases, executor.diagnostics)
     engine.audit_log_planner = AuditLogRepairPlanner(settings, engine.cases, executor.audit_logs)
     automatic_repairs = AutomaticRepairCoordinator(settings, engine.cases, executor)
+    automatic_repairs.runtime = runtime
+    executor.runtime = runtime
+    planner = IntegrationReloadPlanner(settings, engine.cases, ha)
+    proactive = ProactiveMonitor(settings, store, engine.cases, ha, planner)
+    proactive.runtime = runtime
+    mirror = GitHubHistoryMirror(settings, store.path)
+    mirror.runtime = runtime
+    engine.proactive, engine.github_history = proactive, mirror
     dashboard = AutomaticControlDashboard(settings, store, engine, executor)
 
     await store.initialize()
@@ -59,6 +74,8 @@ async def async_main() -> None:
     reconciliation["ai_usage_recovery"] = ai_usage_recovery.as_dict()
     engine.backlog_reconciliation = dict(reconciliation)
     await executor.initialize()
+    await proactive.initialize()
+    await mirror.initialize()
     if settings.repair_executor_enabled and len(settings.repair_backup_password) < 12:
         logging.getLogger(__name__).warning("New repairs blocked: configure a repair backup password of at least 12 characters and save it outside HA")
     resumed = await executor.resume_pending_verifications()
@@ -79,22 +96,20 @@ async def async_main() -> None:
     )
     await dashboard.start()
 
-    auto_repair_task: asyncio.Task[None] | None = None
     if automatic_repairs.enabled and executor.enabled:
         logging.getLogger(__name__).warning(
             "Automatic low-risk repair is enabled; only newly-created plans that pass the existing deterministic executor gates may run"
         )
-        auto_repair_task = asyncio.create_task(
-            automatic_repairs.run_forever(),
-            name="autodoctor-automatic-repair",
-        )
+        runtime.start("automatic-repair", automatic_repairs.run_forever, max_silence=1800)
+    if proactive.enabled:
+        runtime.start("proactive", proactive.run_forever, max_silence=proactive.interval + 600)
+    if mirror.enabled:
+        runtime.start("github-history", mirror.run_forever, max_silence=300)
 
     try:
-        await engine.run_forever()
+        await runtime.start("watcher", engine.run_forever)
     finally:
-        if auto_repair_task is not None:
-            auto_repair_task.cancel()
-            await asyncio.gather(auto_repair_task, return_exceptions=True)
+        await runtime.close()
         await dashboard.stop()
         await executor.close()
         await mcp.close()

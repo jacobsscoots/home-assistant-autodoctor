@@ -1,5 +1,5 @@
 name: "AutoDoctor"
-version: "0.5.3"
+version: "0.6.0"
 slug: "autodoctor"
 description: >-
   Watches Home Assistant system log events, groups recurring failures into incident
@@ -26,6 +26,7 @@ hassio_api: true
 hassio_role: backup
 ingress: true
 ingress_port: 8099
+watchdog: "http://[HOST]:8099/live"
 panel_icon: mdi:doctor
 panel_title: AutoDoctor
 options:
@@ -73,6 +74,19 @@ options:
   audit_log_repair_config_sha256: ""
   diagnostic_template_repair_enabled: false
   diagnostic_repair_entities: []
+  proactive_checks_enabled: false
+  proactive_entities: []
+  proactive_stale_entities: []
+  proactive_integration_entries: []
+  proactive_check_interval_seconds: 60
+  proactive_unavailable_grace_seconds: 180
+  proactive_stale_seconds: 900
+  integration_reload_repair_enabled: false
+  integration_reload_targets: []
+  repair_reconciliation_max_age_seconds: 86400
+  github_history_enabled: false
+  github_history_repository: ""
+  github_history_token: ""
 schema:
   min_level: "list(WARNING|ERROR)"
   min_occurrences_for_ai: "int(1,20)"
@@ -119,3 +133,20 @@ schema:
   diagnostic_template_repair_enabled: bool
   diagnostic_repair_entities:
     - str
+  proactive_checks_enabled: bool
+  proactive_entities:
+    - str
+  proactive_stale_entities:
+    - str
+  proactive_integration_entries:
+    - str
+  proactive_check_interval_seconds: "int(30,3600)"
+  proactive_unavailable_grace_seconds: "int(60,86400)"
+  proactive_stale_seconds: "int(60,2592000)"
+  integration_reload_repair_enabled: bool
+  integration_reload_targets:
+    - str
+  repair_reconciliation_max_age_seconds: "int(900,604800)"
+  github_history_enabled: bool
+  github_history_repository: str
+  github_history_token: password
