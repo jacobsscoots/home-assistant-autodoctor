@@ -234,6 +234,10 @@ def _overview_metrics(
     watcher_good = watcher.lower() in {"ok", "healthy", "running", "watching"}
     mcp_connected = bool(mcp.get("connected"))
     executor_enabled = bool(executor_health.get("enabled"))
+    automatic = executor_enabled and bool(executor_health.get("auto_apply_enabled"))
+    safety = executor_health.get("backup_safety") or {}
+    blocked = bool(safety) and (not safety.get("password_configured") or bool(safety.get("uncertain_attempts")))
+    executor_label = ("Armed — blocked" if blocked else "Automatic + approval") if automatic else ("Approval gated" if executor_enabled else "Off")
     spend = _money(budget.get("spent_usd")) if budget.get("enabled") else "Locked"
     budget_stop = _money(budget.get("stop_threshold_usd"), 2) if budget.get("enabled") else "AI budget off"
 
@@ -241,10 +245,10 @@ def _overview_metrics(
         (
             _metric("Watcher", watcher.title(), hint="Live system-log stream", state="good" if watcher_good else "warn"),
             _metric("Active cases", f"{active_case_count:,}", hint="Cases still needing monitoring or action", state="warn" if active_case_count else "good"),
-            _metric("Repair approvals", f"{proposed_count:,}", hint="Always requires your approval", state="danger" if proposed_count else "good"),
+            _metric("Repair approvals", f"{proposed_count:,}", hint="Enrolled low-risk plans may execute automatically" if automatic else "Always requires your approval", state="danger" if proposed_count else "good"),
             _metric("AI spend", spend, hint=f"Stop threshold {budget_stop}"),
             _metric("MCP diagnostics", "Connected" if mcp_connected else "Offline", hint=str(mcp.get("server_profile") or "read-only"), state="good" if mcp_connected else "warn"),
-            _metric("Repair executor", "Approval gated" if executor_enabled else "Off", hint="Automatic repairs are always off", state="good"),
+            _metric("Repair executor", executor_label, hint="Backup and verification required" if automatic else "Automatic repairs are off", state="warn" if automatic and blocked else "good"),
         )
     )
 
@@ -268,6 +272,14 @@ def render_dashboard(
     lifecycle = case_health.get("notification_lifecycle") or {}
     nonfatal = case_health.get("nonfatal_observation_filter") or {}
     target = case_health.get("private_target_resolution") or {}
+    proactive = health.get("proactive") or {}
+    mirror = health.get("github_history") or {}
+    workers = (health.get("runtime") or {}).get("workers") or {}
+    worker_failures = sum(item.get("state") in {"failed", "stalled"} for item in workers.values())
+    automatic = bool(executor_health.get("enabled") and executor_health.get("auto_apply_enabled"))
+    repair_notice = ("Automatic repairs are armed for explicitly enrolled deterministic recipes. Backups and verification remain mandatory; unsupported repairs require review."
+                     if automatic else "Automatic repairs are off; any supported repair requires a deterministic plan and your individual ingress approval.")
+    approval_hint = "Enrolled low-risk plans may execute automatically; manual approval remains available." if automatic else "Nothing executes without your approval."
 
     active_cases = [
         case for case in cases if str(case.get("status") or "") not in _INACTIVE_CASE_STATUSES
@@ -332,9 +344,9 @@ button,input{{font:inherit}}a{{color:inherit}}.shell{{max-width:1440px;margin:0 
   <div class="topbar__actions"><span class="version">v{_esc(AUTODOCTOR_VERSION)}</span><a class="button button--quiet" href="./" aria-label="Refresh AutoDoctor dashboard">Refresh</a></div>
 </header>
 <section class="metrics" aria-label="System overview">{metrics}</section>
-<section class="safety" aria-label="Safety status"><div class="safety__icon" aria-hidden="true">🛡️</div><div><strong>Safety boundaries are active</strong><p>MCP diagnostics remain read-only and fail-closed. Private target identifiers are withheld from the AI. Automatic repairs are off; any supported repair requires a deterministic plan and your individual ingress approval.</p></div></section>
+<section class="safety" aria-label="Safety status"><div class="safety__icon" aria-hidden="true">🛡️</div><div><strong>Safety boundaries are active</strong><p>MCP diagnostics remain read-only and fail-closed. Private target identifiers are withheld from the AI. {_esc(repair_notice)}</p></div></section>
 
-<section class="section" aria-labelledby="repair-heading"><div class="section__head"><div><h2 id="repair-heading">Repair plans awaiting review</h2></div><div class="section__hint">Nothing executes without your approval.</div></div><div class="stack">{repair_html}</div></section>
+<section class="section" aria-labelledby="repair-heading"><div class="section__head"><div><h2 id="repair-heading">Repair plans awaiting review</h2></div><div class="section__hint">{_esc(approval_hint)}</div></div><div class="stack">{repair_html}</div></section>
 
 <section class="section" aria-labelledby="cases-heading"><div class="section__head"><div><h2 id="cases-heading">Active cases</h2></div><div class="section__hint">Quiet diagnosed cases retire to history after 24h. A recurrence reopens them automatically.</div></div><div class="stack">{case_html}</div></section>
 
@@ -354,6 +366,12 @@ button,input{{font:inherit}}a{{color:inherit}}.shell{{max-width:1440px;margin:0 
     <div class="telemetry__item"><div class="telemetry__k">Private target last result</div><div class="telemetry__v">{_safe_text(target.get('last_result') or 'none',100)}</div></div>
     <div class="telemetry__item"><div class="telemetry__k">Non-fatal evidence filter</div><div class="telemetry__v">{_esc('On' if nonfatal.get('enabled') else 'Off')}</div></div>
     <div class="telemetry__item"><div class="telemetry__k">AI skipped by filter</div><div class="telemetry__v">{int(nonfatal.get('events_suppressed_since_start',0)):,}</div></div>
+    <div class="telemetry__item"><div class="telemetry__k">Failed or stalled workers</div><div class="telemetry__v">{worker_failures}</div></div>
+    <div class="telemetry__item"><div class="telemetry__k">Enrolled health checks</div><div class="telemetry__v">{int(proactive.get('targets',0))}</div></div>
+    <div class="telemetry__item"><div class="telemetry__k">Observed recoveries</div><div class="telemetry__v">{int(proactive.get('observed_recoveries',0))}</div></div>
+    <div class="telemetry__item"><div class="telemetry__k">GitHub history</div><div class="telemetry__v">{_esc('On' if mirror.get('enabled') else 'Off')}</div></div>
+    <div class="telemetry__item"><div class="telemetry__k">History updates pending</div><div class="telemetry__v">{int(mirror.get('pending_updates',0))}</div></div>
+    <div class="telemetry__item"><div class="telemetry__k">Uncertain issue creations</div><div class="telemetry__v">{int(mirror.get('uncertain_creates',0))}</div></div>
   </div></details>
 </section>
 

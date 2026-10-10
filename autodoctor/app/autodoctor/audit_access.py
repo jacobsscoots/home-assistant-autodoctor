@@ -73,6 +73,10 @@ async def ingress_or_authenticated_qualification(
     if ingress_remote_allowed(request.remote):
         return await handler(request)
 
+    # Supervisor health probe: only a boolean liveness result, no diagnostics or credentials.
+    if request.method == "GET" and request.path == "/live" and internal_addon_remote_allowed(request.remote):
+        return await handler(request)
+
     token = _bearer_token(request)
     if (
         request.method == "GET"

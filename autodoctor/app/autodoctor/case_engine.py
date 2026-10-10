@@ -125,16 +125,13 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
         return suppressed
 
     async def run_forever(self) -> None:
+        runtime = getattr(self, "runtime", None)
         triage_task: asyncio.Task[None] | None = None
-        maintenance_task = asyncio.create_task(
-            self._case_maintenance_loop(),
-            name="autodoctor-case-lifecycle-maintenance",
-        )
+        maintenance_task = (runtime.start("case-maintenance", self._case_maintenance_loop, max_silence=2700)
+                            if runtime else asyncio.create_task(self._case_maintenance_loop(), name="autodoctor-case-lifecycle-maintenance"))
         if self.settings.case_backlog_triage_enabled and not isinstance(self.llm, NoProvider):
-            triage_task = asyncio.create_task(
-                self._backlog_triage_loop(),
-                name="autodoctor-case-backlog-triage",
-            )
+            triage_task = (runtime.start("backlog-triage", self._backlog_triage_loop, max_silence=self.settings.case_backlog_triage_interval_seconds + 600)
+                           if runtime else asyncio.create_task(self._backlog_triage_loop(), name="autodoctor-case-backlog-triage"))
         try:
             await super().run_forever()
         finally:
@@ -144,6 +141,9 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            if runtime:
+                await runtime.stop("case-maintenance")
+                await runtime.stop("backlog-triage")
 
     async def _claim_pattern(self, pattern_key: str) -> bool:
         async with self._analysis_claim_lock:
@@ -340,7 +340,8 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
 
     async def _eligible_backlog_cases(self) -> list[dict[str, Any]]:
         cases = await self.cases.list_cases(500)
-        eligible = [case for case in cases if str(case.get("status") or "") in _TRIAGE_CASE_STATUSES]
+        eligible = [case for case in cases if str(case.get("status") or "") in _TRIAGE_CASE_STATUSES
+                    and case.get("family") != "health_probe"]
         eligible.sort(
             key=lambda case: (
                 float(case.get("last_seen") or 0),
@@ -463,6 +464,9 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             except Exception as exc:
                 self.backlog_triage_last_error = str(exc)[:500]
                 _LOG.exception("Case backlog triage cycle failed safely")
+            runtime = getattr(self, "runtime", None)
+            if runtime:
+                runtime.beat("backlog-triage")
             await asyncio.sleep(interval)
 
     async def _case_maintenance_loop(self) -> None:
@@ -479,6 +483,9 @@ class CaseAwareAutoDoctorEngine(AutoDoctorEngine):
             except Exception as exc:
                 self.case_maintenance_last_error = str(exc)[:500]
                 _LOG.exception("Case lifecycle maintenance failed safely")
+            runtime = getattr(self, "runtime", None)
+            if runtime:
+                runtime.beat("case-maintenance")
 
     async def _handle_success(
         self,

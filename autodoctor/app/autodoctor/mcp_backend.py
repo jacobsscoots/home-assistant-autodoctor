@@ -494,15 +494,18 @@ class MCPBackend:
         while True:
             await asyncio.sleep(_REFRESH_SECONDS)
             await self.refresh_context()
+            runtime = getattr(self, "runtime", None)
+            if runtime:
+                runtime.beat("mcp-refresh")
 
     async def start(self) -> None:
         if not self.enabled:
             return
         await self.refresh_context()
         if self._refresh_task is None:
-            self._refresh_task = asyncio.create_task(
-                self._refresh_loop(), name="autodoctor-readonly-mcp-refresh"
-            )
+            runtime = getattr(self, "runtime", None)
+            self._refresh_task = (runtime.start("mcp-refresh", self._refresh_loop, max_silence=_REFRESH_SECONDS + 300)
+                                  if runtime else asyncio.create_task(self._refresh_loop(), name="autodoctor-readonly-mcp-refresh"))
 
     async def close(self) -> None:
         task = self._refresh_task

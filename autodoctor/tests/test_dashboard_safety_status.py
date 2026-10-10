@@ -29,4 +29,4 @@ def test_dashboard_separates_executor_enabled_from_automatic_repairs() -> None:
         approval_nonce="nonce",
     )
     assert "Approval gated" in text
-    assert "Automatic repairs are always off" in text
+    assert "Automatic repairs are off" in text

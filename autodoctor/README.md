@@ -1,5 +1,11 @@
 # AutoDoctor
 
+Current release: **v0.6.0**. See [enrolled autonomy](AUTONOMY.md) for watchdog setup,
+read-only proactive monitoring, the AI-independent integration recipe, verification
+recovery and optional structured GitHub history. All new target/history options are
+off/empty by default. Automatic integration reloads now require exact enrollment;
+existing global auto-apply settings alone do not authorize a reload.
+
 AutoDoctor is an AI-assisted reliability app for Home Assistant. It watches the native
 `system_log_event` stream, fingerprints recurring errors, stores incident history, gathers
 bounded live context, retrieves relevant local historical memory, and can ask an explicitly

@@ -42,6 +42,9 @@ exclude either file or disable other rules:
   This is a fixed platform network, not a configurable remote host. The audit route
   still requires a valid Supervisor API token, a `GET` request, and the exact
   `/api/qualification` path. Tests cover network boundaries and rejected requests.
+  The separate v0.6.0 `GET /live` watchdog route permits that internal network without
+  a token but returns only a boolean and HTTP 200/503; it grants no diagnostic or write
+  access. Its authorization is tested independently of the qualification route.
 - `S7503` on the private resolver's `async_setup`: Home Assistant
   [awaits this integration hook](https://github.com/home-assistant/core/blob/dev/homeassistant/setup.py)
   so its callback registration runs on the event loop. The

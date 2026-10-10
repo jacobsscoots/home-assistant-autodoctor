@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, AsyncIterator
 
 import aiohttp
@@ -29,6 +30,10 @@ class HomeAssistantClient:
         self.token = token
         self.api_base = "http://supervisor/core/api"
         self.ws_url = "ws://supervisor/core/websocket"
+        self.watcher_connected = False
+        self.watcher_reconnects = 0
+        self.watcher_last_connected_at = None
+        self.watcher_last_event_at = None
         self.session = aiohttp.ClientSession(
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             timeout=_HA_HTTP_TIMEOUT,
@@ -76,6 +81,7 @@ class HomeAssistantClient:
         async for msg in ws:
             event = self._message_event(msg)
             if event is not None:
+                self.watcher_last_event_at = time.time()
                 yield event
 
     async def system_log_events(self) -> AsyncIterator[LogEvent]:
@@ -86,16 +92,32 @@ class HomeAssistantClient:
                     self.ws_url, heartbeat=30, timeout=_HA_WS_TIMEOUT
                 ) as ws:
                     await self._subscribe_system_log(ws)
+                    self.watcher_connected = True
+                    self.watcher_last_connected_at = time.time()
                     _LOG.info("Watching Home Assistant system_log_event stream")
                     backoff = 2
                     async for event in self._iter_system_log_events(ws):
                         yield event
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                _LOG.warning("HA websocket disconnected: %s; retrying in %ss", exc, backoff)
+                # A clean server close also needs a bounded reconnect delay.
+                self.watcher_connected = False
+                self.watcher_reconnects += 1
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.watcher_connected = False
+                self.watcher_reconnects += 1
+                _LOG.warning("HA websocket disconnected; retrying in %ss", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+            finally:
+                self.watcher_connected = False
+
+    def watcher_health(self) -> dict[str, Any]:
+        return {"connected": self.watcher_connected, "reconnects": self.watcher_reconnects,
+                "last_connected_at": self.watcher_last_connected_at,
+                "last_event_at": self.watcher_last_event_at}
 
     async def get_state(self, entity_id: str) -> dict[str, Any] | None:
         async with self.session.get(f"{self.api_base}/states/{entity_id}") as response:

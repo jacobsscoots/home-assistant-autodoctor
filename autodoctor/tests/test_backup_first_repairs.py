@@ -35,12 +35,12 @@ class FakeHA:
     session = None
 
     def __init__(self):
-        self.state = "setup_error"
+        self.state = "setup_retry"
         self.reloads = []
         self.fail_reload = False
 
     async def get_config_entry_status(self, target):
-        return {"entry_id": target, "state": self.state, "disabled_by": None}
+        return {"entry_id": target, "state": self.state, "domain": "tplink", "disabled_by": None}
 
     async def reload_config_entry(self, target):
         self.reloads.append(target)
@@ -132,7 +132,9 @@ async def stack(tmp_path, **overrides):
     settings = replace(Settings(repair_executor_enabled=True, auto_apply_low_risk=True,
                                 repair_backup_password=secrets.token_urlsafe(24),
                                 diagnostic_template_repair_enabled=True,
-                                diagnostic_repair_entities=[ENTITY]), **overrides)
+                                diagnostic_repair_entities=[ENTITY],
+                                integration_reload_repair_enabled=True,
+                                integration_reload_targets=[TARGET]), **overrides)
     path = str(tmp_path / "autodoctor.db")
     store = IncidentStore(path)
     await store.initialize()
@@ -222,7 +224,7 @@ def test_target_revalidated_after_backup(tmp_path):
         async with stack(tmp_path) as (_, store, cases, ex, ha, backups, _, clock):
             backups.after_create = lambda: setattr(ha, "state", "loaded")
             plan = await make_plan(store, cases, clock)
-            with pytest.raises(RepairBlocked, match="not_proven_unhealthy"):
+            with pytest.raises(RepairBlocked, match="not_eligible"):
                 await ex.auto_execute(plan["plan_id"])
             assert ha.reloads == []
             assert (await ex.journal.backups())[0]["protected"] == 1
@@ -235,7 +237,7 @@ def test_retention_keeps_only_owned_backups_per_stable_target(tmp_path, keep):
         async with stack(tmp_path, repair_backup_keep=keep) as (_, store, cases, ex, ha, backups, _, clock):
             backups.items["manual"] = {"name": "AutoDoctor pretend manual backup"}
             for _ in range(3):
-                ha.state = "setup_error"
+                ha.state = "setup_retry"
                 plan = await make_plan(store, cases, clock)
                 result = await ex.auto_execute(plan["plan_id"])
                 await verify(ex, result, clock)

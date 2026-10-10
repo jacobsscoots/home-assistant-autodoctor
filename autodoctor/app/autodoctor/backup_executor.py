@@ -16,6 +16,7 @@ from .database import database_connection
 from .diagnostic_recipe import DiagnosticHAClient, RECIPE_ID, RECIPE_TYPE, compile_repair
 from .repair_backup import BackupUncertain, MIB, RepairBlocked, SupervisorBackupClient, positive_size
 from .repair_journal import RepairJournal, config_digest
+from .integration_planner import ORIGIN as RELOAD_ORIGIN, RECIPE_ID as RELOAD_RECIPE_ID, validate_enrollment
 
 _LOG = logging.getLogger(__name__)
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -36,6 +37,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         self.last_cleanup_result = "not_run"
         self._verification_ids: set[str] = set()
         self._reconciliation_task: asyncio.Task[None] | None = None
+        self._reconciliation_after = ""
 
     async def initialize(self) -> None:
         await super().initialize()
@@ -51,7 +53,14 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         if plan.get("repair_type") == audit_log_recipe.REPAIR_TYPE:
             return audit_log_recipe.validate_plan(self.settings, plan, self.enabled)
         if plan.get("repair_type") != RECIPE_TYPE:
-            return super().validate_plan(plan)
+            allowed, reason, target = super().validate_plan(plan)
+            if allowed and (plan.get("evidence") or {}).get("origin") == RELOAD_ORIGIN:
+                evidence = plan["evidence"]
+                if (not self.settings.integration_reload_repair_enabled
+                        or target not in self.settings.integration_reload_targets
+                        or evidence.get("recipe_id") != RELOAD_RECIPE_ID):
+                    return False, "integration_reload_target_not_enrolled", None
+            return allowed, reason, target
         return self._validate_diagnostic_plan(plan)
 
     def _validate_diagnostic_plan(self, plan: dict[str, Any]) -> tuple[bool, str, str | None]:
@@ -121,6 +130,14 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
                 raise RepairBlocked("diagnostic_config_changed_since_proposal")
             return before, after
         entry = await self.ha.get_config_entry_status(target)
+        if "_automatic_reload_domain" in plan:
+            validate_enrollment(self.settings, target, entry)
+            if entry.get("domain") != plan["_automatic_reload_domain"]:
+                raise RepairBlocked("integration_reload_domain_changed")
+        if (plan.get("evidence") or {}).get("origin") == RELOAD_ORIGIN:
+            validate_enrollment(self.settings, target, entry)
+            if entry.get("domain") != plan["evidence"].get("domain"):
+                raise RepairBlocked("integration_reload_domain_changed")
         if entry.get("entry_id") != target or entry.get("disabled_by") is not None:
             raise RepairBlocked("reload_target_missing_or_disabled")
         if entry.get("state") not in _RECOVERABLE:
@@ -134,6 +151,11 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         allowed, reason, target = self.validate_plan(plan)
         if not allowed or target is None:
             raise PermissionError(reason)
+        if mode == "automatic" and plan["repair_type"] == "reload_config_entry":
+            # Automatic integration reloads require exact owner enrollment, including AI proposals.
+            entry = await self.ha.get_config_entry_status(target)
+            validate_enrollment(self.settings, target, entry)
+            plan["_automatic_reload_domain"] = entry["domain"]
         attempt = None
         try:
             self._check_backup_settings()
@@ -294,10 +316,9 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         resumed = await super().resume_pending_verifications()
         await self._try_reconcile_audit_log_repairs()
         if self._reconciliation_task is None or self._reconciliation_task.done():
-            self._reconciliation_task = asyncio.create_task(
-                self._reconcile_audit_log_repairs_periodically(),
-                name="autodoctor-audit-verification-reconciliation",
-            )
+            runtime = getattr(self, "runtime", None)
+            self._reconciliation_task = (runtime.start("verification-recovery", self._reconcile_audit_log_repairs_periodically, max_silence=900)
+                                         if runtime else asyncio.create_task(self._reconcile_audit_log_repairs_periodically(), name="autodoctor-audit-verification-reconciliation"))
             self._tasks.add(self._reconciliation_task)
             self._reconciliation_task.add_done_callback(self._tasks.discard)
         return resumed
@@ -312,6 +333,9 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         while True:
             await asyncio.sleep(_RECONCILIATION_INTERVAL_SECONDS)
             await self._try_reconcile_audit_log_repairs()
+            runtime = getattr(self, "runtime", None)
+            if runtime:
+                runtime.beat("verification-recovery")
 
     async def _verify_after_window(self, execution_id: str) -> None:
         attempt = await self.journal.get(execution_id)
@@ -417,6 +441,10 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         entry = await self.ha.get_config_entry_status(attempt["target"])
         if entry.get("entry_id") != attempt["target"]:
             raise RepairBlocked("verification_target_mismatch")
+        if entry.get("disabled_by") is not None:
+            raise RepairBlocked("verification_target_disabled")
+        if (plan.get("evidence") or {}).get("origin") == RELOAD_ORIGIN and entry.get("domain") != plan["evidence"].get("domain"):
+            raise RepairBlocked("verification_target_domain_changed")
         if entry.get("state") in _RECOVERABLE:
             raise RepairBlocked("integration_not_healthy_after_reload")
         return entry.get("state") == "loaded", {"integration_loaded": entry.get("state") == "loaded"}
@@ -426,7 +454,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
         reconciled = 0
         for attempt in attempts:
             plan = await self.get_plan(attempt["plan_id"])
-            if not plan or plan.get("repair_type") != audit_log_recipe.REPAIR_TYPE:
+            if not plan or plan.get("repair_type") not in {audit_log_recipe.REPAIR_TYPE, RECIPE_TYPE, "reload_config_entry"}:
                 continue
             try:
                 latest = await self.journal.get(attempt["execution_id"])
@@ -447,7 +475,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
                 if await asyncio.to_thread(self._commit_reconciled_success, plan, latest, evidence):
                     reconciled += 1
                     _LOG.info(
-                        "Repair verification reconciled execution=%s plan=%s from later natural evidence",
+                        "Repair verification reconciled execution=%s plan=%s from later read-only evidence",
                         latest["execution_id"], plan["plan_id"],
                     )
                     try:
@@ -460,18 +488,27 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
                     "Could not reconcile inconclusive audit-log repair execution=%s; recovery hold retained for retry",
                     attempt["execution_id"],
                 )
+            finally:
+                runtime = getattr(self, "runtime", None)
+                if runtime:
+                    runtime.beat("verification-recovery")
         return reconciled
 
     def _inconclusive_audit_log_attempts(self) -> list[dict[str, Any]]:
         with database_connection(self.db_path, readonly=True) as db:
             db.row_factory = sqlite3.Row
-            rows = db.execute(
+            query = (
                 "SELECT * FROM repair_attempts "
-                "WHERE repair_type=? AND stage='verification_inconclusive' "
+                "WHERE repair_type IN (?,?,?) AND stage='verification_inconclusive' "
                 "AND uncertain=0 AND protected=1 AND backup_slug!='' AND deleted=0 "
-                "ORDER BY created_at",
-                (audit_log_recipe.REPAIR_TYPE,),
-            ).fetchall()
+                "AND verification_started_at>=? AND execution_id>? ORDER BY execution_id LIMIT 20"
+            )
+            args = (audit_log_recipe.REPAIR_TYPE, RECIPE_TYPE, "reload_config_entry",
+                    self._now() - self.settings.repair_reconciliation_max_age_seconds)
+            rows = db.execute(query, (*args, self._reconciliation_after)).fetchall()
+            if not rows and self._reconciliation_after:
+                rows = db.execute(query, (*args, "")).fetchall()
+            self._reconciliation_after = str(rows[-1]["execution_id"]) if rows else ""
             return [dict(row) for row in rows]
 
     def _commit_reconciled_success(self, plan, attempt, evidence) -> bool:
@@ -501,7 +538,12 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             ):
                 return False
             case = db.execute("SELECT * FROM incident_cases WHERE pattern_key=?", (plan["pattern_key"],)).fetchone()
-            if not case or self._recurrence_in_transaction(db, plan, attempt):
+            if (not case or case["repair_plan_id"] not in {None, plan["plan_id"]}
+                    or case["status"] not in {"verifying", "needs_user_action", "repair_available"}
+                    or self._recurrence_in_transaction(db, plan, attempt)):
+                return False
+            if db.execute("SELECT 1 FROM repair_plans WHERE pattern_key=? AND created_at>? LIMIT 1",
+                          (plan["pattern_key"], plan["created_at"])).fetchone():
                 return False
             db.execute(
                 "UPDATE repair_attempts SET stage='succeeded', protected=0, error_code='' WHERE execution_id=?",
@@ -509,7 +551,7 @@ class BackupFirstRepairExecutor(AutoApplyRepairExecutor):
             )
             db.execute("UPDATE repair_executions SET status='succeeded', verification_json=?, error='' WHERE execution_id=?", (json.dumps(evidence), eid))
             db.execute("UPDATE repair_plans SET status='succeeded', verified_at=?, updated_at=?, error='' WHERE plan_id=?", (now, now, plan["plan_id"]))
-            db.execute("UPDATE incident_cases SET status='resolved', updated_at=? WHERE pattern_key=?", (now, plan["pattern_key"]))
+            db.execute("UPDATE incident_cases SET status='resolved', repair_plan_id=?, updated_at=? WHERE pattern_key=?", (plan["plan_id"], now, plan["pattern_key"]))
             self._persist_verified_fix(db, plan, dict(case), evidence, now)
         return True
 

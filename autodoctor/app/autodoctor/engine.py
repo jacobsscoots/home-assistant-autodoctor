@@ -59,7 +59,7 @@ class AutoDoctorEngine:
     async def run_forever(self) -> None:
         async for event in self.ha.system_log_events():
             try:
-                await self.handle_event(event)
+                await asyncio.wait_for(self.handle_event(event), timeout=180)
             except Exception:
                 _LOG.exception("Failed to process system log event")
 
@@ -627,8 +627,13 @@ class AutoDoctorEngine:
                 "autodoctor_version": AUTODOCTOR_VERSION,
             }
         )
+        watcher = self.ha.watcher_health() if hasattr(self.ha, "watcher_health") else {"connected": None}
+        runtime = getattr(self, "runtime", None)
+        workers = runtime.snapshot() if runtime else {"alive": True, "workers": {}}
         return {
-            "status": "ok",
+            "status": "ok" if workers["alive"] and watcher["connected"] is True else "degraded",
+            "watcher": watcher,
+            "runtime": workers,
             "processed_events": self.processed_events,
             "open_incidents": open_incidents,
             "incident_retention_limit": int(self.settings.max_incidents_retained),
